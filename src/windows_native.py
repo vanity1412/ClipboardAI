@@ -1005,17 +1005,11 @@ class WindowsApp:
         disabled = disabled_actions(disabled)
         previous = self.config.get('HOTKEYS', {})
         previous_disabled = self.config.get('HOTKEYS_DISABLED', [])
+        previous_errors = list(getattr(self, 'hotkey_errors', []))
         values = {'HOTKEYS': selected, 'HOTKEYS_DISABLED': disabled}
         editing = getattr(self, 'hotkey_open', False)
         if getattr(self, 'region_pending', False):
             raise ValueError('Hủy chọn vùng trước khi đổi phím.')
-        if not self.enabled:
-            self.save_input_preferences(values)
-            if editing:
-                for ident in self.hotkeys:
-                    self.user.UnregisterHotKey(self.hwnd, ident)
-                self.hotkeys = []
-            return
         for ident in self.hotkeys:
             self.user.UnregisterHotKey(self.hwnd, ident)
         self.config['HOTKEYS'] = selected
@@ -1025,7 +1019,9 @@ class WindowsApp:
             if self.hotkey_errors:
                 raise ValueError('Phím bị ứng dụng khác chiếm: ' + ', '.join(self.hotkey_errors))
             self.save_input_preferences(values)
-            if editing:
+            # Probe availability even while paused, then release the probe.
+            # WM_HOTKEY stays blocked by enabled/hotkey_open during this check.
+            if editing or not self.enabled:
                 for ident in self.hotkeys:
                     self.user.UnregisterHotKey(self.hwnd, ident)
                 self.hotkeys = []
@@ -1034,10 +1030,11 @@ class WindowsApp:
                 self.user.UnregisterHotKey(self.hwnd, ident)
             self.config['HOTKEYS'] = previous
             self.config['HOTKEYS_DISABLED'] = previous_disabled
-            if not editing:
+            if self.enabled and not editing:
                 self.register_hotkeys()
             else:
                 self.hotkeys = []
+                self.hotkey_errors = previous_errors
             raise
 
     def open_hotkey_editor(self):

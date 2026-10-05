@@ -289,3 +289,63 @@ class RegionHotkeyTests(unittest.TestCase):
             app.hotkey_errors = ['F8']
             app.state = 'Đã copy kết quả'
             self.assertIn('Phím chưa bật: F8', app.result_text())
+
+    def test_paused_save_checks_occupied_keys_without_saving_or_resuming(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = fixtures.SelectedFixTests().app(folder)
+            app.enabled = False
+            app.hotkey_open = True
+            app.hotkeys, app.hotkey_errors = [], []
+            app.config.update(HOTKEYS={'201': 'Ctrl+Alt+S'}, HOTKEYS_DISABLED=['209'])
+            app.user.RegisterHotKey.side_effect = lambda hwnd, ident, modifiers, key: key != 81
+            app.save_input_preferences = Mock()
+            app.send_clipboard = Mock()
+            with self.assertRaisesRegex(ValueError, 'Ctrl\\+Alt\\+Q'):
+                app.apply_hotkeys({'201': 'Ctrl+Alt+Q'}, ['209'])
+            self.assertFalse(app.enabled)
+            self.assertEqual(app.hotkeys, [])
+            self.assertEqual(app.hotkey_errors, [])
+            self.assertEqual(app.config['HOTKEYS'], {'201': 'Ctrl+Alt+S'})
+            self.assertEqual(app.config['HOTKEYS_DISABLED'], ['209'])
+            app.save_input_preferences.assert_not_called()
+            self.assertEqual(app.user.UnregisterHotKey.call_count, 7)
+            app.window_proc(app.hwnd, 0x0312, 201, 0)
+            app.send_clipboard.assert_not_called()
+
+    def test_paused_save_and_editor_close_keep_shortcuts_paused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = fixtures.SelectedFixTests().app(folder)
+            app.enabled = False
+            app.hotkey_open = True
+            app.hotkeys, app.hotkey_errors = [], []
+            app.user.RegisterHotKey.return_value = True
+            app.save_input_preferences = Mock()
+            app.apply_hotkeys({'201': 'Ctrl+Alt+Q'})
+            self.assertFalse(app.enabled)
+            self.assertEqual(app.hotkeys, [])
+            self.assertEqual(app.user.RegisterHotKey.call_count, 9)
+            self.assertEqual(app.user.UnregisterHotKey.call_count, 9)
+            self.assertEqual(app.config['HOTKEYS']['201'], 'Ctrl+Alt+Q')
+            app.save_input_preferences.assert_called_once()
+            app.user.RegisterHotKey.reset_mock()
+            app.results.put(('hotkey_closed',))
+            app.tick()
+            self.assertFalse(app.enabled)
+            self.assertFalse(app.hotkey_open)
+            app.user.RegisterHotKey.assert_not_called()
+
+    def test_paused_save_io_failure_keeps_previous_settings_and_keys_free(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = fixtures.SelectedFixTests().app(folder)
+            app.enabled = False
+            app.hotkeys, app.hotkey_errors = [], []
+            app.config.update(HOTKEYS={'201': 'Ctrl+Alt+S'}, HOTKEYS_DISABLED=['209'])
+            app.user.RegisterHotKey.return_value = True
+            app.save_input_preferences = Mock(side_effect=OSError('test failure'))
+            with self.assertRaises(OSError):
+                app.apply_hotkeys({'201': 'Ctrl+Alt+Q'})
+            self.assertFalse(app.enabled)
+            self.assertEqual(app.hotkeys, [])
+            self.assertEqual(app.config['HOTKEYS'], {'201': 'Ctrl+Alt+S'})
+            self.assertEqual(app.config['HOTKEYS_DISABLED'], ['209'])
+            self.assertEqual(app.user.UnregisterHotKey.call_count, 9)

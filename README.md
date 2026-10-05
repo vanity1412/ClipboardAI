@@ -2,6 +2,8 @@
 
 Ứng dụng Windows chạy nền: chụp/copy câu hỏi hoặc code, gửi AI, nhận đáp án tự vào clipboard để Ctrl+V. Rê chuột vào icon tray để xem trạng thái, số giây xử lý và đáp án gọn.
 
+Bảng chức năng đầy đủ, menu tray, các cửa sổ cài đặt và vị trí mã nguồn: [docs/CHUC_NANG.md](docs/CHUC_NANG.md). Tài liệu này cũng được chép vào thư mục `dist` khi build.
+
 ## Bắt đầu
 
 1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi; không chạy cùng bản ClipboardAI cũ.
@@ -33,6 +35,7 @@ Chuột phải icon tray → **Model / API / cài đặt → Cài đặt phím t
 - Bấm vào ô rồi nhấn tổ hợp, hoặc nhập trực tiếp như `Ctrl+Alt+Q`. Tổ hợp riêng vẫn được nhớ khi tắt chức năng rồi mở lại cài đặt.
 - Bấm **Lưu**, sau đó đóng cửa sổ để áp dụng. Trong lúc sửa phím, các phím của tool tạm được trả cho ứng dụng khác.
 - Phím trùng giữa các chức năng đang bật hoặc bị ứng dụng khác chiếm: không áp dụng thay đổi, giữ bộ phím trước.
+- Kiểm tra phím bị chiếm vẫn chạy khi app đang Tạm dừng; Lưu hoặc đóng cửa sổ đổi phím không tự bật lại app.
 - **Khôi phục mặc định** điền lại bộ phím ở bảng trên và bật các chức năng; cần bấm Lưu để áp dụng.
 - Tùy chọn lưu trong `preferences.json`, gồm tổ hợp và các chức năng đã tắt. Cấu hình cũ có phím mở chat sẽ được bỏ qua; các phím tùy chỉnh khác được giữ.
 
@@ -61,6 +64,16 @@ python scripts/run_tests.py
 ```
 
 Kết quả ở `dist/ClipboardAI.exe`. Test giao diện có thể chạy thêm `python scripts/run_tests.py --desktop` tại desktop Windows. Chạy source: `python src/deepseek_flash_entry.py`; mở cấu hình trực tiếp: thêm `--open-zoo`.
+
+Để đóng gói bản thử với đúng tên `ClipboardAI_Region_Test.exe`:
+
+```powershell
+./build.ps1 -Name ClipboardAI_Region_Test
+```
+
+File ở `dist/ClipboardAI_Region_Test.exe`; dùng cùng mã nguồn và cài đặt như bản chính. `SHA256.txt` ghi mã kiểm tra và tên EXE vừa build.
+
+Build kiểm tra các tệp Tcl/Tk trước khi đóng gói. Nếu runtime bị thiếu hoặc môi trường build chặn quyền đọc, script dừng với lỗi thay vì tạo EXE thiếu cửa sổ chọn vùng/API Zoo/cài đặt phím. Dùng Python có Tcl/Tk và môi trường cho phép đọc các tệp runtime đó.
 
 ## Dữ liệu riêng
 
