@@ -61,6 +61,7 @@ def _load_cloud_config(root, deepseek):
 
 def load_cloud_config(root, deepseek):
     config = _load_cloud_config(root, deepseek)
+    config['BROWSER_AUTH_ROOT'] = str(Path(root).resolve() / '.clipboardai-auth')
     try:
         store = ZooStore(root)
         config['ZOO_ONLY'] = store.path.exists()
@@ -102,6 +103,19 @@ class CloudClient(DeepSeekClient):
             config = self.config
             def call(candidate, vision):
                 selected = candidate['vision_model'] if vision else candidate['model']
+                if candidate['provider'] == 'codex':
+                    from browser_provider import BrowserSession
+                    _, timeout = limits(config, candidate['max_tokens'], candidate['timeout'])
+                    deadline = getattr(self, 'deadline', None)
+                    if deadline is not None:
+                        import time
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError()
+                        timeout = min(timeout or remaining, remaining)
+                    with BrowserSession(candidate, config.get('BROWSER_AUTH_ROOT'), self.cancel_event) as browser:
+                        answer = browser.ask(selected, request_messages(text, history, instruction), timeout, getattr(self, 'on_stream', None))
+                    return answer, candidate['name'] + ': ' + selected
                 if candidate['provider'] == 'deepseek' and selected in ('deepseek-flash', 'deepseek-v4-pro'):
                     self.config = dict(config, DEEPSEEK_MODEL=selected, DEEPSEEK_API_KEY=candidate['api_key'],
                                        DEEPSEEK_MAX_TOKENS=str(candidate['max_tokens']), DEEPSEEK_TIMEOUT_S=str(candidate['timeout']))
@@ -110,17 +124,15 @@ class CloudClient(DeepSeekClient):
                     finally:
                         self.config = config
                 else:
-                    body = dict(model=selected, stream=self.cancel_event is not None,
-                        messages=request_messages(text, history, instruction))
+                    from provider_protocols import request_body, completed_response
                     tokens, timeout = limits(config, candidate['max_tokens'], candidate['timeout'])
-                    if tokens:
-                        body['max_tokens'] = tokens
-                    data = self.post(candidate['base_url'] + '/chat/completions', body, timeout, key=candidate['api_key'])
+                    protocol = candidate['provider']
+                    body = request_body(protocol, selected, request_messages(text, history, instruction), tokens, self.cancel_event is not None)
+                    route = {'anthropic': '/messages', 'responses': '/responses'}.get(protocol, '/chat/completions')
+                    options = {'protocol': protocol} if protocol in ('anthropic', 'responses') else {}
+                    data = self.post(candidate['base_url'] + route, body, timeout, key=candidate['api_key'], **options)
                     try:
-                        choice = data['choices'][0]
-                        answer = choice['message']['content']
-                        if choice.get('finish_reason') != 'stop' or not isinstance(answer, str) or not answer.strip():
-                            raise ValueError()
+                        answer = completed_response(protocol, data)
                     except (KeyError, IndexError, TypeError, ValueError):
                         raise RuntimeError('API Zoo chưa trả câu trả lời hoàn chỉnh; clipboard giữ nguyên') from None
                 return answer.strip(), candidate['name'] + ': ' + selected

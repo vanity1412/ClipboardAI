@@ -1,10 +1,14 @@
-"""Compact provider editor: endpoint/key → discovered model dropdown."""
+"""Provider presets, editable model suggestions, discovery and native login."""
 import copy
+from pathlib import Path
 import queue
 import threading
 import uuid
 from urllib.parse import urlsplit
+import webbrowser
 from api_zoo import ZooStore, seed_profiles, validate, consolidate, discover_models, update_catalog
+from provider_catalog import PRESETS, preset_for, suggestions, api_key_page
+from browser_provider import BrowserSession
 
 
 def open_editor(root_path, config, results):
@@ -12,9 +16,10 @@ def open_editor(root_path, config, results):
     from tkinter import ttk, messagebox
     window = tk.Tk()
     window.title('API Zoo')
-    window.geometry('600x350')
-    window.minsize(560, 350)
+    window.geometry('740x580')
+    window.minsize(650, 570)
     local = queue.Queue()
+    auth_root = str(Path(root_path).resolve() / '.clipboardai-auth')
     try:
         data = ZooStore(root_path).load()
     except (OSError, ValueError, TypeError):
@@ -26,111 +31,189 @@ def open_editor(root_path, config, results):
         data = seed_profiles(config)
     data = copy.deepcopy(data)
     selected, pending, timer, loading = [None], [0], [None], [False]
-    credential_host = [None]
+    credential_host, operation_cancel = [None], [None]
+    browser_ready = set()
     frame = ttk.Frame(window, padding=12)
     frame.pack(fill='both', expand=True)
     tree = ttk.Treeview(frame, columns=('api', 'models'), show='headings', height=4)
     tree.heading('api', text='API · ★ đang dùng')
     tree.heading('models', text='Model')
-    tree.column('api', width=330)
-    tree.column('models', width=210)
+    tree.column('api', width=380)
+    tree.column('models', width=260)
     tree.pack(fill='x')
     form = ttk.Frame(frame)
     form.pack(fill='x', pady=10)
+    preset = tk.StringVar(value='Custom · OpenAI-compatible')
+    protocol = ['compatible']
+    ttk.Label(form, text='Nhà cung cấp').grid(row=0, column=0, sticky='w')
+    providers = ttk.Combobox(form, name='provider', textvariable=preset, state='readonly', values=list(PRESETS))
+    providers.grid(row=0, column=1, sticky='ew', padx=(10, 0), pady=3)
     fields = {field: tk.StringVar() for field in ('name', 'base_url', 'api_key')}
     entries = {}
-    for row, (field, label) in enumerate((('name', 'Tên'), ('base_url', 'Endpoint'), ('api_key', 'API key'))):
+    for row, (field, label) in enumerate((('name', 'Tên'), ('base_url', 'Endpoint'), ('api_key', 'API key')), 1):
         ttk.Label(form, text=label).grid(row=row, column=0, sticky='w', pady=3)
         entry = ttk.Entry(form, textvariable=fields[field], show='•' if field == 'api_key' else '')
         entry.grid(row=row, column=1, sticky='ew', padx=(10, 0), pady=3)
         entries[field] = entry
     form.columnconfigure(1, weight=1)
-    ttk.Label(form, text='Model').grid(row=3, column=0, sticky='w', pady=3)
-    model = tk.StringVar()
-    chooser = ttk.Combobox(form, textvariable=model, state='readonly')
-    chooser.grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=3)
+    model, vision = tk.StringVar(), tk.StringVar()
+    ttk.Label(form, text='Model trả lời').grid(row=4, column=0, sticky='w', pady=3)
+    chooser = ttk.Combobox(form, name='model', textvariable=model, state='normal')
+    chooser.grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=3)
+    ttk.Label(form, text='Model đọc ảnh').grid(row=5, column=0, sticky='w', pady=3)
+    image_chooser = ttk.Combobox(form, name='vision', textvariable=vision, state='normal')
+    image_chooser.grid(row=5, column=1, sticky='ew', padx=(10, 0), pady=3)
+    ttk.Label(frame, text='Chọn gợi ý hoặc nhập ID model. Để trống model đọc ảnh nếu API chỉ hỗ trợ chữ.', wraplength=690).pack(anchor='w')
+    auth_bar = ttk.Frame(frame)
+    auth_bar.pack(fill='x', pady=8)
     auto = tk.BooleanVar(value=data['auto'])
     ttk.Checkbutton(frame, text='Tự chuyển API khi lỗi', variable=auto).pack(anchor='w')
-    status = tk.StringVar(value='Nhập endpoint và key để tự lấy model từ API.')
-    ttk.Label(frame, textvariable=status, wraplength=590).pack(anchor='w', pady=8)
+    status = tk.StringVar(value='Chọn nhà cung cấp để điền endpoint và gợi ý model.')
+    ttk.Label(frame, textvariable=status, wraplength=690).pack(anchor='w', pady=8)
     bar = ttk.Frame(frame)
-    bar.pack(fill='x')
+    bar.pack(fill='x', side='bottom')
+
+    def invalidate():
+        pending[0] += 1
+        loading[0] = False
+        if operation_cancel[0]:
+            operation_cancel[0].set()
+            operation_cancel[0] = None
+        if timer[0]:
+            window.after_cancel(timer[0])
+            timer[0] = None
 
     def redraw():
         tree.delete(*tree.get_children())
         for p in sorted(data['profiles'], key=lambda p: p['priority']):
-            tree.insert('', 'end', iid=p['id'], values=(('★ ' if p['id'] == data['primary'] else '') + p['name'], str(len(p['models'])) + ' model'))
+            tree.insert('', 'end', iid=p['id'], values=(('★ ' if p['id'] == data['primary'] else '') + p['name'], p['model'] or 'chưa chọn'))
 
     def current():
         old = next((p for p in data['profiles'] if p['id'] == selected[0]), {})
         p = dict(old, **{k: v.get().strip() for k, v in fields.items()})
-        p['id'] = selected[0] or uuid.uuid4().hex
-        host = urlsplit(p['base_url']).hostname or ''
-        p['name'] = p['name'] or host
-        p.setdefault('provider', 'deepseek' if host == 'api.deepseek.com' else 'compatible')
+        if not selected[0]:
+            selected[0] = uuid.uuid4().hex
+        p['id'] = selected[0]
+        p['name'] = p['name'] or urlsplit(p['base_url']).hostname or 'API'
+        p.update(provider=protocol[0], model=model.get().strip(), vision_model=vision.get().strip(), enabled=True)
         p.setdefault('priority', len(data['profiles']))
         p.setdefault('timeout', 0)
         p.setdefault('max_tokens', 0)
-        p.setdefault('vision_model', '')
+        if p.get('api_key') != old.get('api_key') or p.get('base_url', '').rstrip('/') != old.get('base_url') or p['provider'] != old.get('provider'):
+            p['models'] = []
         p.setdefault('models', [])
-        p['enabled'] = True
-        if p.get('api_key') != old.get('api_key') or p.get('base_url', '').rstrip('/') != old.get('base_url'):
-            p.update(models=[], model='', vision_model='')
-        else:
-            p['model'] = model.get()
-        p['provider'] = 'deepseek' if host == 'api.deepseek.com' else 'compatible'
         return validate({'profiles': [p]})['profiles'][0]
+
+    def auth_controls():
+        browser = protocol[0] == 'codex'
+        entries['api_key'].configure(state='disabled' if browser else 'normal')
+        entries['base_url'].configure(state='disabled' if browser else 'normal')
+        auth_button.configure(text='Đăng nhập ChatGPT' if browser else 'Mở trang API key')
+        logout_button.configure(state='normal' if browser else 'disabled')
+
+    def set_catalog(catalog, selected_model='', selected_vision=''):
+        chooser['values'] = [m['id'] for m in catalog]
+        image_chooser['values'] = [m['id'] for m in catalog if m['vision'] is not False]
+        model.set(selected_model)
+        vision.set(selected_vision)
+
+    def choose_preset(_=None):
+        invalidate()
+        label = preset.get()
+        protocol[0], endpoint, _, _ = PRESETS[label]
+        fields['name'].set(label)
+        fields['base_url'].set(endpoint)
+        fields['api_key'].set('')
+        credential_host[0] = urlsplit(endpoint).hostname
+        catalog = suggestions(label)
+        chosen = catalog[0]['id'] if catalog else ''
+        set_catalog(catalog, chosen, chosen if catalog and catalog[0]['vision'] is True else '')
+        auth_controls()
+        status.set('Đăng nhập ChatGPT bằng Codex CLI chính thức; không cần API key. Model sẽ được lấy sau khi đăng nhập.' if protocol[0] == 'codex' else 'Đây là gợi ý model, không xác nhận quyền sử dụng. Nhập key và Lấy lại model để ưu tiên danh sách API.')
 
     def pick(_=None):
         if not tree.selection():
             return
-        pending[0] += 1
-        loading[0] = False
+        invalidate()
         p = next(p for p in data['profiles'] if p['id'] == tree.selection()[0])
         selected[0] = p['id']
         credential_host[0] = urlsplit(p['base_url']).hostname
+        protocol[0] = p['provider']
+        preset.set(preset_for(p))
         for k, variable in fields.items():
             variable.set(p[k])
-        chooser['values'] = [m['id'] for m in p['models']]
-        model.set(p['model'] if p['model'] in chooser['values'] else '')
-        status.set('Chọn model rồi Lưu để dùng API này.' if p['models'] else 'Đang lấy danh sách model…')
-        if not p['models']:
-            window.after(100, fetch)
+        set_catalog(p['models'] or suggestions(preset.get()), p['model'], p['vision_model'])
+        auth_controls()
+        status.set('Chọn/nhập model rồi Lưu. Dùng Lấy lại model để kiểm tra danh sách hiện tại.')
+        if protocol[0] == 'codex' or not p['models']:
+            timer[0] = window.after(100, fetch)
 
     def new():
-        pending[0] += 1
-        loading[0] = False
+        invalidate()
         selected[0] = None
         credential_host[0] = None
         tree.selection_remove(*tree.selection())
-        for variable in fields.values():
-            variable.set('')
-        chooser['values'] = []
-        model.set('')
+        preset.set('Custom · OpenAI-compatible')
+        choose_preset()
         entries['base_url'].focus_set()
-        status.set('Nhập endpoint HTTPS và key. Danh sách model sẽ tự tải.')
+
+    def start(operation):
+        try:
+            p = current()
+            if protocol[0] != 'codex' and not p['api_key']:
+                status.set('Nhập API key của nhà cung cấp này.')
+                return
+        except (ValueError, TypeError) as exc:
+            status.set(str(exc))
+            return
+        invalidate()
+        token = pending[0]
+        cancel = threading.Event()
+        operation_cancel[0] = cancel
+        loading[0] = True
+        status.set('Hoàn tất đăng nhập trong trình duyệt (tối đa 5 phút); có thể bấm Hủy.' if operation == 'login' else 'Đang kiểm tra phiên/lấy model…')
+        def run():
+            try:
+                if operation in ('login', 'logout'):
+                    with BrowserSession(p, auth_root, cancel) as session:
+                        if operation == 'logout':
+                            session.logout()
+                            local.put(('logout', token, p))
+                            return
+                        catalog = session.login()
+                else:
+                    catalog = discover_models(p, auth_root) if p['provider'] == 'codex' else discover_models(p)
+                local.put(('models', token, p, catalog))
+            except InterruptedError:
+                local.put(('error', token, 'Đã hủy đăng nhập/thao tác.'))
+            except Exception as exc:
+                code = getattr(exc, 'code', getattr(exc, 'status', None))
+                message = str(exc) if isinstance(exc, RuntimeError) and p['provider'] == 'codex' else ('Không lấy được model' + (f' (HTTP {code}).' if isinstance(code, int) else '; kiểm tra endpoint/key hoặc nhập ID model thủ công.'))
+                local.put(('error', token, message))
+        threading.Thread(target=run, daemon=True).start()
 
     def fetch():
         if timer[0]:
             window.after_cancel(timer[0])
             timer[0] = None
-        try:
-            p = current()
-            if not p['api_key']:
-                return
-        except (ValueError, TypeError):
-            return
-        pending[0] += 1
-        token = pending[0]
-        loading[0] = True
-        status.set('Đang lấy model từ API…')
-        def run():
+        start('models')
+
+    def authenticate():
+        if protocol[0] == 'codex':
+            start('login')
+        else:
             try:
-                local.put(('models', token, p, discover_models(p)))
-            except Exception as exc:
-                code = getattr(exc, 'code', getattr(exc, 'status', None))
-                local.put(('error', token, 'Không lấy được model' + (f' (HTTP {code}).' if isinstance(code, int) else '; kiểm tra endpoint/key hoặc /models.')))
-        threading.Thread(target=run, daemon=True).start()
+                page = api_key_page(current())
+                if page:
+                    webbrowser.open(page)
+                else:
+                    status.set('Dùng trang quản lý key của nhà cung cấp gateway riêng.')
+            except ValueError as exc:
+                status.set(str(exc))
+
+    def cancel_operation():
+        invalidate()
+        status.set('Đã hủy thao tác; cấu hình đã lưu được giữ nguyên.')
 
     def edited(_=None):
         try:
@@ -139,16 +222,11 @@ def open_editor(root_path, config, results):
             host = None
         if host:
             if credential_host[0] and credential_host[0] != host:
-                # A saved key belongs to its original host. A new endpoint
-                # must receive its own key before automatic discovery runs.
                 fields['api_key'].set('')
             credential_host[0] = host
-        if timer[0]:
-            window.after_cancel(timer[0])
-        pending[0] += 1
-        loading[0] = False
+        invalidate()
         chooser['values'] = []
-        model.set('')
+        image_chooser['values'] = []
         timer[0] = window.after(900, fetch)
     for field in ('base_url', 'api_key'):
         entries[field].bind('<KeyRelease>', edited)
@@ -168,16 +246,23 @@ def open_editor(root_path, config, results):
 
     def save():
         if loading[0]:
-            status.set('Đợi tải model xong rồi Lưu.')
+            status.set('Đợi thao tác xong hoặc Hủy trước khi Lưu.')
             return
         try:
             p = current()
-            if not p['models'] or model.get() not in {m['id'] for m in p['models']}:
-                status.set('Lấy model từ API rồi chọn trong danh sách trước khi Lưu.')
-                fetch()
+            if not p['model'] or (not p['api_key'] and p['provider'] != 'codex'):
+                status.set('Cần chọn/nhập model và API key (hoặc đăng nhập ChatGPT).')
                 return
-            p['model'] = model.get()
-            selected[0] = p['id']
+            if p['provider'] == 'codex' and p['id'] not in browser_ready:
+                status.set('Đăng nhập ChatGPT hoặc Lấy lại model để kiểm tra phiên trước khi Lưu.')
+                return
+            if not p['models']:
+                p['models'] = suggestions(preset.get())
+            known = {m['id'] for m in p['models']}
+            for ident in (p['model'], p['vision_model']):
+                if ident and ident not in known:
+                    p['models'].append({'id': ident, 'vision': None})
+                    known.add(ident)
             data['profiles'] = [old for old in data['profiles'] if old['id'] != p['id']] + [p]
             data.update(primary=p['id'], auto=auto.get())
             data.update(consolidate(data))
@@ -186,31 +271,44 @@ def open_editor(root_path, config, results):
             redraw()
         except (ValueError, TypeError) as exc:
             status.set(str(exc))
+    auth_button = ttk.Button(auth_bar, text='Mở trang API key', command=authenticate)
+    auth_button.pack(side='left', padx=(0, 6))
+    logout_button = ttk.Button(auth_bar, text='Đăng xuất', command=lambda: start('logout'), state='disabled')
+    logout_button.pack(side='left', padx=(0, 6))
+    ttk.Button(auth_bar, text='Hủy', command=cancel_operation).pack(side='left')
     for label, command in (('+ API', new), ('Xóa', delete), ('Lấy lại model', fetch)):
         ttk.Button(bar, text=label, command=command).pack(side='left', padx=(0, 6))
     ttk.Button(bar, text='Lưu', command=save).pack(side='right')
+    providers.bind('<<ComboboxSelected>>', choose_preset)
     tree.bind('<<TreeviewSelect>>', pick)
+
     def poll():
         try:
             while True:
                 event = local.get_nowait()
-                if event[0] in ('models', 'error'):
+                if event[0] in ('models', 'error', 'logout'):
                     if event[1] != pending[0]:
                         continue
                     loading[0] = False
+                    operation_cancel[0] = None
                     if event[0] == 'error':
                         status.set(event[2])
                         continue
+                    if event[0] == 'logout':
+                        browser_ready.discard(event[2]['id'])
+                        status.set('Đã đăng xuất phiên ChatGPT của API này. Đăng nhập lại trước khi gửi.')
+                        continue
                     p = update_catalog(event[2], event[3])
+                    if p['provider'] == 'codex':
+                        browser_ready.add(p['id'])
                     selected[0] = p['id']
                     credential_host[0] = urlsplit(p['base_url']).hostname
                     data['profiles'] = [old for old in data['profiles'] if old['id'] != p['id']] + [p]
                     if not fields['name'].get():
                         fields['name'].set(p['name'])
-                    chooser['values'] = [m['id'] for m in p['models']]
-                    model.set(p['model'])
+                    set_catalog(p['models'], p['model'], p['vision_model'])
                     redraw()
-                    status.set(f'Đã lấy {len(p["models"])} model. Chọn model rồi Lưu.')
+                    status.set(f'Đã lấy {len(p["models"])} model. Danh sách không bảo đảm quota/quyền gọi; chọn model rồi Lưu.')
                 else:
                     status.set(event[1])
         except queue.Empty:
@@ -223,9 +321,10 @@ def open_editor(root_path, config, results):
     poll()
     window.update_idletasks()
     results.put(('zoo_opened', window.winfo_id()))
-    if frame.winfo_reqheight() + 24 > 350:
-        window.geometry(f'600x{frame.winfo_reqheight() + 24}')
+    if frame.winfo_reqheight() + 24 > 580:
+        window.geometry(f'740x{frame.winfo_reqheight() + 24}')
     try:
         window.mainloop()
     finally:
+        invalidate()
         results.put(('zoo_closed',))

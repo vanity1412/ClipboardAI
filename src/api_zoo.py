@@ -2,12 +2,13 @@
 import copy
 import json
 import math
+import re
 import time
 import uuid
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlencode
 from urllib.request import Request, urlopen
 
 
@@ -64,8 +65,10 @@ def validate(data):
         if any(ord(c) < 32 or ord(c) > 126 for c in row['api_key']):
             raise ValueError('Key không hợp lệ')
         provider = p.get('provider', 'compatible')
-        if provider not in ('compatible', 'deepseek'):
-            raise ValueError('Chọn giao thức OpenAI compatible hoặc DeepSeek')
+        if provider not in ('compatible', 'deepseek', 'anthropic', 'responses', 'codex'):
+            raise ValueError('Giao thức API không hợp lệ')
+        if provider == 'codex' and (row['base_url'] != 'https://chatgpt.com' or row['api_key'] or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', row['id'])):
+            raise ValueError('OpenAI Browser cần endpoint ChatGPT, không dùng API key và cần ID an toàn')
         if provider == 'deepseek' and u.hostname != 'api.deepseek.com':
             raise ValueError('Giao thức DeepSeek cần endpoint DeepSeek chính thức')
         models = p.get('models', [])
@@ -99,7 +102,7 @@ def validate(data):
         raise ValueError('API chính không tồn tại')
     if primary and not next(p for p in result if p['id'] == primary)['enabled']:
         raise ValueError('API chính phải được bật; chọn API chính khác trước khi tắt')
-    return dict(version=2, auto=data.get('auto', True), primary=primary, profiles=result)
+    return dict(version=3, auto=data.get('auto', True), primary=primary, profiles=result)
 
 
 def consolidate(data):
@@ -107,7 +110,7 @@ def consolidate(data):
     data = validate(data)
     groups, profiles, primary = {}, [], data['primary']
     for p in sorted(data['profiles'], key=lambda p: p['priority']):
-        identity = (p['base_url'], p['api_key'], p['provider'])
+        identity = (p['base_url'], p['api_key'], p['provider'], p['id'] if p['provider'] == 'codex' else '')
         if identity not in groups:
             groups[identity] = copy.deepcopy(p)
             if p['name'] == 'DeepSeek Flash':
@@ -181,28 +184,53 @@ def selected_profile(config):
     return next((p for p in config.get('API_ZOO', {}).get('profiles', []) if 'zoo:' + p['id'] == ident and p['enabled']), None)
 
 
-def discover_models(profile):
+def discover_models(profile, auth_root=None):
+    if profile.get('provider') == 'codex':
+        from browser_provider import BrowserSession
+        with BrowserSession(profile, auth_root) as session:
+            session.require_account()
+            return session.models()
     # A redirect may not carry an API credential to a second host.
     from urllib.request import build_opener, HTTPRedirectHandler
     class NoRedirect(HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None
-    req = Request(profile['base_url'] + '/models', headers={'Authorization': 'Bearer ' + profile['api_key'],
-                  'Accept': 'application/json', 'User-Agent': 'ClipboardAI/2.0'})
-    try:
-        with build_opener(NoRedirect()).open(req, timeout=20) as response:
-            raw = response.read(4 * 1024 * 1024 + 1)
-            if len(raw) > 4 * 1024 * 1024:
-                raise ValueError('Danh sách model vượt giới hạn')
-            data = json.loads(raw)
-    except Exception as exc:
-        if hasattr(exc, 'close'):
-            exc.close()
-        raise
-    if not isinstance(data, dict) or not isinstance(data.get('data'), list):
-        raise ValueError('API không trả danh sách model hợp lệ')
+    headers = {'Accept': 'application/json', 'User-Agent': 'ClipboardAI/3.0'}
+    if profile.get('provider') == 'anthropic':
+        headers.update({'x-api-key': profile['api_key'], 'anthropic-version': '2023-06-01'})
+    else:
+        headers['Authorization'] = 'Bearer ' + profile['api_key']
+    rows, cursor, cursors, total_bytes = [], None, set(), 0
+    opener = build_opener(NoRedirect())
+    for _ in range(20):
+        query = '?' + urlencode({'after_id': cursor}) if cursor else ''
+        req = Request(profile['base_url'] + '/models' + query, headers=headers)
+        try:
+            with opener.open(req, timeout=20) as response:
+                raw = response.read(4 * 1024 * 1024 + 1)
+                total_bytes += len(raw)
+                if total_bytes > 4 * 1024 * 1024:
+                    raise ValueError('Danh sách model vượt giới hạn')
+                data = json.loads(raw)
+        except Exception as exc:
+            if hasattr(exc, 'close'):
+                exc.close()
+            raise
+        if not isinstance(data, dict) or not isinstance(data.get('data'), list):
+            raise ValueError('API không trả danh sách model hợp lệ')
+        rows.extend(data['data'])
+        if len(rows) > 1000:
+            raise ValueError('Danh sách model vượt giới hạn')
+        if profile.get('provider') != 'anthropic' or not data.get('has_more'):
+            break
+        cursor = data.get('last_id')
+        if not isinstance(cursor, str) or not cursor or cursor in cursors:
+            raise ValueError('Phân trang model không hợp lệ')
+        cursors.add(cursor)
+    else:
+        raise ValueError('Danh sách model vượt giới hạn phân trang')
     catalog = []
-    for m in data['data']:
+    for m in rows:
         if not isinstance(m, dict) or not m.get('id'):
             continue
         capabilities = m.get('capabilities', {})
@@ -235,8 +263,8 @@ def update_catalog(profile, catalog):
     return validate({'profiles': [p]})['profiles'][0]
 
 
-def probe_profile(profile):
-    catalog = discover_models(profile)
+def probe_profile(profile, auth_root=None):
+    catalog = discover_models(profile, auth_root)
     return profile['model'] in {m['id'] for m in catalog}, len(catalog)
 
 
@@ -246,7 +274,7 @@ class ZooRouter:
 
     def run(self, config, selected, vision, call, cancel=None, notify=None):
         data = config['API_ZOO']
-        profiles = sorted((p for p in data['profiles'] if p['enabled'] and p['api_key'] and p['model'] and (not vision or p['vision_model'])),
+        profiles = sorted((p for p in data['profiles'] if p['enabled'] and (p['api_key'] or p['provider'] == 'codex') and p['model'] and (not vision or p['vision_model'])),
                           key=lambda p: (p['id'] != selected['id'], p['model'] != selected['model'], p['priority']))
         if not data['auto']:
             profiles = [p for p in profiles if p['id'] == selected['id']]
@@ -255,7 +283,7 @@ class ZooRouter:
         attempts, last = 0, None
         for profile in profiles:
             identity = (profile['id'], profile['base_url'], profile['api_key'], profile['model'])
-            credential = ('key', profile['base_url'], profile['api_key'])
+            credential = ('key', profile['base_url'], profile['api_key'], profile['id'] if profile['provider'] == 'codex' else '')
             if max(self.cooldowns.get(identity, 0), self.cooldowns.get(credential, 0)) > time.monotonic():
                 continue
             while attempts < 3:

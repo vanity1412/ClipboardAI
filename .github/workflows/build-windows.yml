@@ -36,6 +36,7 @@ jobs:
             dist/ClipboardAI.exe
             dist/README.md
             dist/CHUC_NANG.md
+            dist/API_PROVIDERS.md
             dist/.env.example
             dist/SHA256.txt
           include-hidden-files: true

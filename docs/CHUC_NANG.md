@@ -79,7 +79,7 @@ Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã l�
 | Cửa sổ | Các thao tác |
 |---|---|
 | Chat — mở qua menu | Xem hội thoại, nhập câu hỏi, Gửi, Hủy, Copy kết quả, Phiên mới, chọn chế độ, tự copy, Menu |
-| API Zoo | Thêm/xóa API; sửa tên, endpoint, key; lấy lại model; chọn model; tự chuyển API khi lỗi; Lưu |
+| API Zoo | Mẫu OpenAI/Claude/DeepSeek/Grok/Gemini và custom; gợi ý/nhập model; model đọc ảnh; đăng nhập/hủy/đăng xuất ChatGPT qua Codex CLI; sửa API/key; lấy lại model; tự chuyển API; Lưu |
 | Sửa prompt | Chọn mục đích, prompt mặc định/theo yêu cầu/đã lưu, sửa nội dung, lưu cho chế độ đó |
 | Cài đặt | Giới hạn lịch sử; token/timeout khi cấu hình hỗ trợ; lưu cấu hình; kiểm tra kết nối; tạm dừng; xóa lịch sử; **Cài đặt phím tắt** |
 | Cài đặt phím tắt | Bật/tắt từng chức năng, nhập/bấm tổ hợp mới, kiểm tra trùng/bị chiếm, khôi phục mặc định, Lưu |
@@ -112,6 +112,7 @@ Lịch sử chữ lưu trong `session.json`. Ảnh của các phiên được gi
 | `region_capture.py`, `screen_capture.py` | Chọn vùng, tọa độ màn hình, chụp cửa sổ, PNG trong bộ nhớ |
 | `session_state.py`, `session_images.py`, `conversation_memory.py` | Hội thoại, lưu/khôi phục, ảnh theo phiên và rút gọn ngữ cảnh gửi API |
 | `api_zoo.py`, `api_zoo_ui.py` | Quản lý API, lấy model, chọn API/model và chuyển API khi lỗi |
+| `provider_catalog.py`, `provider_protocols.py`, `browser_provider.py` | Mẫu/gợi ý model, Anthropic/Responses, đăng nhập ChatGPT qua Codex app-server |
 | `cloud_client.py`, `deepseek_client.py` | Gửi chữ/ảnh tới API và kiểm tra phản hồi hoàn chỉnh |
 | `chat_modes.py`, `coding_prompt.py`, `prompt_profiles.py`, `prompt_editor.py` | Mục đích trả lời, suy luận và prompt theo chế độ |
 | `answer_policy.py`, `compact_preview.py`, `hover_layout.py`, `request_display.py` | Chính sách đáp án, trạng thái, bản xem gọn và chuyển trang khi rê chuột |
@@ -120,3 +121,5 @@ Lịch sử chữ lưu trong `session.json`. Ảnh của các phiên được gi
 | `tests/`, `verify_*.py` | Kiểm thử hồi quy và công cụ kiểm tra giao diện/luồng |
 
 Build bản chính: `./build.ps1`. Build đúng tên bản thử: `./build.ps1 -Name ClipboardAI_Region_Test`. Kết quả nằm trong `dist` cùng README, tài liệu này, cấu hình mẫu trống và SHA256. Repo chứa toàn bộ mã công khai, test và workflow build; không chứa API key, lịch sử cá nhân hoặc EXE build cục bộ.
+
+Chi tiết provider, giao thức custom và đăng nhập: [API_PROVIDERS.md](API_PROVIDERS.md). F7 đã bỏ; mở chat từ tray. Các provider API dùng key; riêng OpenAI Browser có luồng đăng nhập ChatGPT tích hợp qua Codex CLI chính thức.

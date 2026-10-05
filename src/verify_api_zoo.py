@@ -4,7 +4,7 @@ from pathlib import Path
 import queue
 import tempfile
 import threading
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 def run(output):
@@ -46,16 +46,59 @@ def run(output):
                     assert len(entries) == 3, 'Expected three fields'
                     assert entries[2].cget('show') == '•'
                     buttons['+ API'].invoke()
+                    providers = next(w for w in all_widgets if w.winfo_class() == 'TCombobox' and w.winfo_name() == 'provider')
+                    model_choice = next(w for w in all_widgets if w.winfo_class() == 'TCombobox' and w.winfo_name() == 'model')
+                    from provider_catalog import PRESETS
+                    assert set(providers['values']) == set(PRESETS), 'Provider presets missing'
+                    for label in ('OpenAI · API key', 'Claude · Anthropic', 'DeepSeek', 'Grok · xAI', 'Gemini · Google', 'Custom · Anthropic-compatible'):
+                        providers.set(label)
+                        providers.event_generate('<<ComboboxSelected>>')
+                        window.update()
+                        assert entries[1].get() == PRESETS[label][1], 'Wrong preset endpoint'
+                        assert list(model_choice['values']) == list(PRESETS[label][2]), 'Model suggestions missing'
+                    providers.set('OpenAI Browser · ChatGPT')
+                    providers.event_generate('<<ComboboxSelected>>')
+                    window.update()
+                    assert str(entries[2].cget('state')) == 'disabled', 'Browser profile asks for key'
+                    login = next(w for w in walk(window) if w.winfo_class() == 'TButton' and w.cget('text') == 'Đăng nhập ChatGPT')
+                    login.invoke()
+                    window.after(500, after_browser)
+                except Exception as exc:
+                    report['error_type'] = type(exc).__name__
+                    report['error'] = str(exc)
+                    window.destroy()
+
+            def after_browser():
+                try:
+                    buttons = {w.cget('text'): w for w in walk(window) if w.winfo_class() == 'TButton'}
+                    entries = [w for w in walk(window) if w.winfo_class() == 'TEntry']
+                    model_choice = next(w for w in walk(window) if w.winfo_class() == 'TCombobox' and w.winfo_name() == 'model')
+                    assert 'browser-model' in model_choice['values'], 'Login did not retrieve models'
+                    buttons['Lưu'].invoke()
+                    window.after(500, after_browser_save)
+                except Exception as exc:
+                    report.update(error_type=type(exc).__name__, error=str(exc))
+                    window.destroy()
+
+            def after_browser_save():
+                try:
+                    saved = ZooStore(folder).load()
+                    browser = next(p for p in saved['profiles'] if p['id'] == saved['primary'])
+                    assert browser['provider'] == 'codex' and not browser['api_key'], 'Browser profile not saved without a key'
+                    report.update(browser_login_mocked=True, browser_model_saved=True, preset_endpoints_checked=True)
+                    buttons = {w.cget('text'): w for w in walk(window) if w.winfo_class() == 'TButton'}
+                    entries = [w for w in walk(window) if w.winfo_class() == 'TEntry']
+                    buttons['+ API'].invoke()
                     for widget, value in zip(entries, ('API mẫu', 'https://sample.example/v1', 'synthetic-key')):
                         widget.delete(0, 'end')
                         widget.insert(0, value)
                     entries[2].event_generate('<FocusOut>')
                     def save_discovered():
                         try:
-                            choice = next(w for w in walk(window) if w.winfo_class() == 'TCombobox')
+                            choice = next(w for w in walk(window) if w.winfo_class() == 'TCombobox' and w.winfo_name() == 'model')
                             assert list(choice['values']) == ['coding-model', 'vision-model'], 'Model discovery did not fill dropdown: ' + str(choice['values'])
-                            assert str(choice.cget('state')) == 'readonly', 'Model dropdown is editable'
-                            choice.set('coding-model')
+                            assert str(choice.cget('state')) == 'normal', 'Manual model input is missing'
+                            choice.set('custom-manual-model')
                             buttons['Lưu'].invoke()
                             window.after(500, verify)
                         except Exception as exc:
@@ -71,9 +114,10 @@ def run(output):
                 try:
                     saved = ZooStore(folder).load()
                     p = next(p for p in saved['profiles'] if p['id'] == saved['primary'])
-                    assert p['name'] == 'API mẫu' and p['model'] == 'coding-model', 'Primary/model not saved'
+                    assert p['name'] == 'API mẫu' and p['model'] == 'custom-manual-model', 'Manual primary/model not saved'
+                    assert 'custom-manual-model' in {m['id'] for m in p['models']}, 'Manual model missing from tray catalog'
                     assert p['api_key'] == 'synthetic-key' and p['vision_model'] == 'vision-model', 'Key or vision model not saved'
-                    assert len(saved['profiles']) == 3, 'Providers duplicated'
+                    assert len(saved['profiles']) == 4, 'Providers duplicated'
                     # Capture the actual HWND, never pixels from other apps
                     # that might cover the test editor while the user works.
                     window.update()
@@ -99,7 +143,7 @@ def run(output):
                         window.destroy()
                     report.update(ok=True, imported_existing_profiles=True, key_masked=True,
                                   add_edit_primary_save=True, automatic_discovery=True,
-                                  no_manual_model_input=True, compact_ui=True,
+                                  manual_model_input_supported=True, provider_presets=True,
                                   probe_mocked=True, screenshot_synthetic=True)
                     window.after(80, finish)
                     return
@@ -111,7 +155,9 @@ def run(output):
             return window
         config = dict(MODEL_CHOICES=DEFAULT_MODELS, DEEPSEEK_API_KEY='deepseek-placeholder', MIRAI_API_KEY='mirai-placeholder')
         catalog = [{'id': 'coding-model', 'vision': False}, {'id': 'vision-model', 'vision': True}]
-        with patch('tkinter.Tk', factory), patch('api_zoo_ui.discover_models', return_value=catalog), patch('tkinter.messagebox.showerror', side_effect=AssertionError('UI validation unexpectedly failed')):
+        browser = MagicMock()
+        browser.return_value.__enter__.return_value.login.return_value = [{'id': 'browser-model', 'vision': True}]
+        with patch('tkinter.Tk', factory), patch('api_zoo_ui.BrowserSession', browser), patch('api_zoo_ui.discover_models', return_value=catalog), patch('tkinter.messagebox.showerror', side_effect=AssertionError('UI validation unexpectedly failed')):
             open_editor(folder, config, events)
     (output / 'api-zoo-verification.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
     if not report['ok']:

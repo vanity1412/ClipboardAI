@@ -121,7 +121,7 @@ class AIClient:
             except RuntimeError:
                 pass
 
-    def post(self, url, body, timeout, key=None):
+    def post(self, url, body, timeout, key=None, protocol='compatible'):
         deadline = getattr(self, 'deadline', None)
         if deadline is not None:
             remaining = deadline - time.monotonic()
@@ -129,11 +129,13 @@ class AIClient:
                 raise TimeoutError()
             timeout = min(timeout or remaining, remaining)
         headers = {"Content-Type": "application/json", 'User-Agent': 'ClipboardAI/2.0', 'Accept': 'application/json'}
-        if key:
+        if protocol == 'anthropic':
+            headers.update({'x-api-key': key, 'anthropic-version': '2023-06-01'})
+        elif key:
             headers["Authorization"] = "Bearer " + key
         req = Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
         if body.get("stream"):
-            return self.stream_post(url, body, timeout, key)
+            return self.stream_post(url, body, timeout, key, protocol)
         class NoRedirect(HTTPRedirectHandler):
             def redirect_request(self, *args, **kwargs):
                 return None
@@ -145,7 +147,9 @@ class AIClient:
             exc.close()
             raise error from None
 
-    def stream_post(self, url, body, timeout, key=None):
+    def stream_post(self, url, body, timeout, key=None, protocol='compatible'):
+        from provider_protocols import EventStream
+        native_stream = EventStream(protocol) if protocol in ('anthropic', 'responses') else None
         callback = getattr(self, 'on_stream', None)
         if callback:
             callback(None)  # A fallback starts a fresh preview, never concatenate attempts.
@@ -163,7 +167,9 @@ class AIClient:
                 if address.query:
                     path += "?" + address.query
                 header = f"POST {path} HTTP/1.1\r\nHost: {address.hostname}:{port}\r\nUser-Agent: ClipboardAI/2.0\r\nAccept: text/event-stream\r\nContent-Type: application/json\r\nContent-Length: {len(payload)}\r\nConnection: close\r\n\r\n"
-                if key:
+                if protocol == 'anthropic':
+                    header = header[:-2] + 'x-api-key: ' + key + '\r\nanthropic-version: 2023-06-01\r\n\r\n'
+                elif key:
                     header = header[:-2] + "Authorization: Bearer " + key + "\r\n\r\n"
                 writer.write(header.encode("ascii") + payload)
                 await writer.drain()
@@ -253,6 +259,13 @@ class AIClient:
                             raise AIResponseError("Stream trả cấu trúc sai; clipboard giữ nguyên.", "stream_format")
                         if item.get("error"):
                             raise RuntimeError("API báo lỗi xử lý; clipboard giữ nguyên" if key else "Ollama báo lỗi xử lý")
+                        if native_stream:
+                            delta, completed = native_stream.feed(item)
+                            append_content(delta)
+                            if completed is not None:
+                                flush_preview(True)
+                                return completed
+                            continue
                         if key:
                             if isinstance(item.get("usage"), dict):
                                 usage = item["usage"]
@@ -1866,7 +1879,7 @@ class WindowsApp:
                         profile = selected_profile(probe_config)
                         if profile:
                             from api_zoo import probe_profile
-                            found, count = probe_profile(profile)
+                            found, count = probe_profile(profile, probe_config.get('BROWSER_AUTH_ROOT'))
                             self.results.put(('probe', profile['name'] + ': kết nối OK; ' + str(count) + ' model; ' + ('có model đã chọn' if found else 'model chưa được liệt kê')))
                             return
                         if provider == "Mirai":

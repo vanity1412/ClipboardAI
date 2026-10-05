@@ -27,3 +27,4 @@ dist/
 .venv/
 venv/
 payload/
+.clipboardai-auth/

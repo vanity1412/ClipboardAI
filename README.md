@@ -4,6 +4,8 @@
 
 Bảng chức năng đầy đủ, menu tray, các cửa sổ cài đặt và vị trí mã nguồn: [docs/CHUC_NANG.md](docs/CHUC_NANG.md). Tài liệu này cũng được chép vào thư mục `dist` khi build.
 
+API Zoo có mẫu OpenAI, **OpenAI Browser/ChatGPT**, Claude, DeepSeek, Grok, Gemini và custom OpenAI-compatible/Anthropic-compatible/Responses; điền endpoint và gợi ý model, lấy model từ API hoặc nhập ID riêng. OpenAI Browser dùng Codex CLI chính thức để đăng nhập; các mẫu API còn lại dùng key. Hướng dẫn và nguồn tham khảo OpenCode: [docs/API_PROVIDERS.md](docs/API_PROVIDERS.md).
+
 ## Bắt đầu
 
 1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi; không chạy cùng bản ClipboardAI cũ.
@@ -73,6 +75,8 @@ Kết quả ở `dist/ClipboardAI.exe`. Test giao diện có thể chạy thêm 
 
 File ở `dist/ClipboardAI_Region_Test.exe`; dùng cùng mã nguồn và cài đặt như bản chính. `SHA256.txt` ghi mã kiểm tra và tên EXE vừa build.
 
+Nếu EXE cũ đang chạy và bị Windows khóa, build sang thư mục riêng: `./build.ps1 -Name ClipboardAI_Region_Test -OutputDirectory dist/providers`. Đóng bản cũ trước khi mở bản mới; chuyển cấu hình riêng cục bộ nếu muốn dùng lại. Thư mục mới không có sẵn key hoặc phiên đăng nhập.
+
 Build kiểm tra các tệp Tcl/Tk trước khi đóng gói. Nếu runtime bị thiếu hoặc môi trường build chặn quyền đọc, script dừng với lỗi thay vì tạo EXE thiếu cửa sổ chọn vùng/API Zoo/cài đặt phím. Dùng Python có Tcl/Tk và môi trường cho phép đọc các tệp runtime đó.
 
 ## Dữ liệu riêng
@@ -80,6 +84,8 @@ Build kiểm tra các tệp Tcl/Tk trước khi đóng gói. Nếu runtime bị 
 API key lưu trong `api_zoo.json` (hoặc `.env`/`mirai_config.json`) cạnh EXE, dạng plaintext, không mã hóa. Lịch sử hỏi đáp lưu trong `session.json`, tùy chọn/prompt lưu trong `preferences.json`, cũng dạng plaintext. Khi dùng AI, chữ/ảnh được gửi đến endpoint của API/model đã chọn và API dự phòng nếu bật; không đưa dữ liệu nhạy cảm vào yêu cầu nếu không muốn gửi nhà cung cấp đó.
 
 Repository chỉ chứa code và cấu hình mẫu trống. `.gitignore` loại key, lịch sử, ảnh, log, EXE và build. Không ép thêm các file riêng bằng `git add -f`. Không đặt key trong source hoặc GitHub Actions; build không cần key.
+
+Đăng nhập OpenAI Browser lưu phiên riêng vào `.clipboardai-auth/<id>` cạnh EXE, đã loại khỏi Git. Không chia sẻ thư mục này. Codex CLI quản lý token và gửi yêu cầu AI; ClipboardAI không nhập cookie hoặc kho đăng nhập Codex đang có.
 
 ## Cấu trúc
 
