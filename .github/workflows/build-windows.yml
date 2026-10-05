@@ -28,6 +28,19 @@ jobs:
       - name: Build executable with Tkinter
         shell: pwsh
         run: ./build.ps1
+      - name: Verify Tcl/Tk in packaged executable
+        shell: pwsh
+        run: |
+          $taskExecutable = (Resolve-Path -LiteralPath dist/ClipboardAI.exe).Path
+          $taskProcess = Start-Process -FilePath $taskExecutable -ArgumentList '--verify-tk' -WindowStyle Hidden -PassThru
+          if (-not $taskProcess.WaitForExit(45000)) {
+            Stop-Process -Id $taskProcess.Id -Force -ErrorAction SilentlyContinue
+            throw 'Packaged Tcl/Tk verification timed out'
+          }
+          if ($taskProcess.ExitCode -ne 0) { throw 'Packaged Tcl/Tk verification failed' }
+          $taskReport = Get-Content -LiteralPath dist/tk-verification.json -Raw | ConvertFrom-Json
+          $taskReport | ConvertTo-Json
+          if (-not $taskReport.ok -or -not $taskReport.frozen) { throw 'Packaged Tcl/Tk report is invalid' }
       - name: Upload executable and instructions
         uses: actions/upload-artifact@v6
         with:

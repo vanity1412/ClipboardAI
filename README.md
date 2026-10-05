@@ -79,6 +79,8 @@ Nếu EXE cũ đang chạy và bị Windows khóa, build sang thư mục riêng:
 
 Build kiểm tra các tệp Tcl/Tk trước khi đóng gói. Nếu runtime bị thiếu hoặc môi trường build chặn quyền đọc, script dừng với lỗi thay vì tạo EXE thiếu cửa sổ chọn vùng/API Zoo/cài đặt phím. Dùng Python có Tcl/Tk và môi trường cho phép đọc các tệp runtime đó.
 
+Kiểm tra chấp nhận cả tệp Tcl/Tk riêng và Tcl/Tk 9 nhúng dữ liệu trong DLL (`//zipfs:/`), nên không yêu cầu danh sách `data_files` phải khác rỗng trong trường hợp nhúng. Workflow kiểm tra thêm EXE bằng `--verify-tk`: khởi tạo Tk/ttk ẩn, xuất phiên bản và đường dẫn thư viện; không mở tray, gửi API hoặc thay clipboard.
+
 ## Dữ liệu riêng
 
 API key lưu trong `api_zoo.json` (hoặc `.env`/`mirai_config.json`) cạnh EXE, dạng plaintext, không mã hóa. Lịch sử hỏi đáp lưu trong `session.json`, tùy chọn/prompt lưu trong `preferences.json`, cũng dạng plaintext. Khi dùng AI, chữ/ảnh được gửi đến endpoint của API/model đã chọn và API dự phòng nếu bật; không đưa dữ liệu nhạy cảm vào yêu cầu nếu không muốn gửi nhà cung cấp đó.
