@@ -1,0 +1,29 @@
+# Private runtime data (any directory)
+.env
+.env.*
+!.env.example
+deepseek_private.py
+api_zoo*.json
+mirai_config*.json
+preferences*.json
+session*.json
+network_config*.json
+status.log
+*.log
+*.png
+*.jpg
+*.jpeg
+*-verification.json
+verification.json
+self-test.json
+setup-status.txt
+# Build outputs and local environments
+__pycache__/
+*.py[cod]
+*.exe
+*.spec
+build/
+dist/
+.venv/
+venv/
+payload/

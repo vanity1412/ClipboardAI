@@ -1,0 +1,42 @@
+name: Build Windows EXE
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Unit tests (no live API or physical network changes)
+        run: python scripts/run_tests.py
+      - name: Build executable with Tkinter
+        shell: pwsh
+        run: ./build.ps1
+      - name: Upload executable and instructions
+        uses: actions/upload-artifact@v6
+        with:
+          name: ClipboardAI-Windows-x64
+          path: |
+            dist/ClipboardAI.exe
+            dist/README.md
+            dist/.env.example
+            dist/SHA256.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
