@@ -96,11 +96,13 @@ Luồng dùng: **copy/chọn ảnh → gửi → chờ hoàn tất → Ctrl+V**.
 
 Chọn vùng dùng ảnh cửa sổ được lấy trước khi bộ chọn mở. Kéo chuột và thả để gửi; Esc, chuột phải hoặc phím Hủy đã cấu hình hủy chọn. Clipboard đổi trong lúc chọn hoặc chờ AI được bảo vệ; dùng **Shift+F8** hoặc menu Copy để lấy đáp án hoàn tất. Không có cửa sổ chat tự bật khi trả lời.
 
+Gửi lại một lượt hỏi tiếp bị hủy/lỗi giữ lịch sử đã hoàn tất trước đó, kể cả khi nội dung hỏi tiếp trùng câu cũ. Gửi lại lượt đã hoàn tất thay đáp án của lượt đó khi thành công. Phản hồi thiếu kết thúc, bị cắt do token, từ chối hoặc yêu cầu công cụ không được coi là đáp án hoàn tất để tự copy; phần thông báo đang xử lý của model cũng không được ghép vào đáp án cuối.
+
 Trắc nghiệm giữ nhãn của đề. Nếu đề không có nhãn, số đáp án là thứ tự phương án từ trên xuống; `Câu 1: 2` nghĩa là phương án thứ hai. Điền khuyết trả phần cần điền. Câu thiếu dữ kiện hoặc không đọc rõ được đánh dấu “Chưa xác định”. Prompt riêng có thể thay đổi cách trả lời.
 
 Ô rê chuột hiện đáp án gọn, câu chưa xác định và lỗi. Nhiều đáp án được chia cột/trang, tự chuyển trang sau khoảng **5 giây khi đang rê chuột**. Clipboard giữ nội dung câu trả lời đầy đủ.
 
-Lịch sử chữ lưu trong `session.json`. Ảnh của các phiên được giữ trong bộ nhớ với giới hạn dung lượng; không được lưu vào lịch sử trên đĩa để khôi phục sau khi thoát app.
+Lịch sử chữ lưu trong `session.json`. Ảnh của các phiên được giữ trong bộ nhớ với giới hạn dung lượng; không được lưu vào lịch sử trên đĩa để khôi phục sau khi thoát app. Sau khi mở lại app, cần chụp/bổ sung lại ảnh nếu câu hỏi tiếp cần xem ảnh cũ; nhãn ảnh trong lịch sử chữ không chứa dữ liệu ảnh.
 
 ## Mã nguồn theo chức năng
 

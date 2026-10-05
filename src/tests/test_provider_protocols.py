@@ -141,8 +141,10 @@ class ProviderTests(unittest.TestCase):
                 hits.append(dict(self.headers))
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 protocol = 'anthropic' if self.path == '/messages' else 'responses'
-                events = ([{'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
+                events = ([{'type': 'message_start', 'message': {'content': [], 'stop_reason': None}},
+                           {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
                            {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'complete'}},
+                           {'type': 'content_block_stop', 'index': 0},
                            {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}}, {'type': 'message_stop'}]
                           if protocol == 'anthropic' else [{'type': 'response.output_text.delta', 'delta': 'complete'},
                            {'type': 'response.completed', 'response': {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'complete'}]}]}}])
@@ -276,7 +278,7 @@ class BrowserBridgeTests(unittest.TestCase):
             thread_options = self.session.request.call_args_list[1].args[1]
             self.assertTrue(thread_options['ephemeral'])
             self.assertEqual(thread_options['sandbox'], 'read-only')
-            self.assertEqual(thread_options['approvalPolicy'], 'untrusted')
+            self.assertEqual(thread_options['approvalPolicy'], 'on-request')
 
 
 if __name__ == '__main__':

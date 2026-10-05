@@ -148,7 +148,7 @@ class AIClient:
             raise error from None
 
     def stream_post(self, url, body, timeout, key=None, protocol='compatible'):
-        from provider_protocols import EventStream
+        from provider_protocols import EventStream, stream_error
         native_stream = EventStream(protocol) if protocol in ('anthropic', 'responses') else None
         callback = getattr(self, 'on_stream', None)
         if callback:
@@ -189,6 +189,7 @@ class AIClient:
                     raise APIHTTPError(int(status[1]), headers.get('retry-after'))
                 chunked = "chunked" in headers.get("transfer-encoding", "")
                 content, pending, finish_reason, usage = [], b"", None, None
+                unsupported_message = {}
                 content_bytes = 0
                 preview, last_preview = [], time.monotonic()
                 def flush_preview(force=False):
@@ -246,7 +247,7 @@ class AIClient:
                             if line == b"[DONE]":
                                 if finish_reason is None:
                                     raise APIConnectionError("AI stream ended without finish_reason")
-                                result = {"choices": [{"finish_reason": finish_reason, "message": {"content": "".join(content)}}]}
+                                result = {"choices": [{"finish_reason": finish_reason, "message": dict(unsupported_message, content="".join(content))}]}
                                 if usage is not None:
                                     result["usage"] = usage
                                 flush_preview(True)
@@ -257,8 +258,10 @@ class AIClient:
                             raise AIResponseError("Stream trả JSON không hợp lệ; clipboard giữ nguyên.", "stream_format") from None
                         if not isinstance(item, dict):
                             raise AIResponseError("Stream trả cấu trúc sai; clipboard giữ nguyên.", "stream_format")
-                        if item.get("error"):
-                            raise RuntimeError("API báo lỗi xử lý; clipboard giữ nguyên" if key else "Ollama báo lỗi xử lý")
+                        if key:
+                            stream_error(protocol, item)
+                        elif item.get("error"):
+                            raise RuntimeError("Ollama báo lỗi xử lý")
                         if native_stream:
                             delta, completed = native_stream.feed(item)
                             append_content(delta)
@@ -275,8 +278,17 @@ class AIClient:
                             for choice in choices:
                                 if not isinstance(choice, dict) or not isinstance(choice.get("delta") or {}, dict):
                                     raise AIResponseError("Stream trả delta sai định dạng; clipboard giữ nguyên.", "stream_format")
+                                if choice.get('index', 0) != 0 or finish_reason is not None and (choice.get('delta') or {}).get('content'):
+                                    raise AIResponseError("Stream trả nội dung sai thứ tự; clipboard giữ nguyên.", "stream_format")
                                 append_content((choice.get("delta") or {}).get("content"))
+                                for field in ('refusal', 'tool_calls', 'function_call'):
+                                    if (choice.get('delta') or {}).get(field):
+                                        # The final guard needs presence only, never raw
+                                        # tool arguments or refusal text in diagnostics.
+                                        unsupported_message[field] = True
                                 if choice.get("finish_reason"):
+                                    if finish_reason is not None and finish_reason != choice['finish_reason']:
+                                        raise AIResponseError("Stream trả trạng thái hoàn tất mâu thuẫn; clipboard giữ nguyên.", "stream_format")
                                     finish_reason = choice["finish_reason"]
                             continue
                         if not isinstance(item.get("message") or {}, dict):
@@ -1560,7 +1572,9 @@ class WindowsApp:
             self.refresh_panel()
             return
         memory_messages = list(self.session.messages) if not fresh and action not in ('problem', 'capture') else []
-        replace_last = (action == 'retry_chat' and len(memory_messages) >= 2 and
+        replace_last = (action == 'retry_chat'
+            and self.session.last_request_state in ('completed', 'retrying_completed')
+            and len(memory_messages) >= 2 and
             memory_messages[-2]['role'] == 'user' and memory_messages[-1]['role'] == 'assistant' and
             memory_messages[-2]['content'] in (text, text + '\n[Ảnh đính kèm]'))
         if replace_last:
@@ -1595,6 +1609,11 @@ class WindowsApp:
             self.session.last_request = text
             if action != 'retry_chat':
                 self.session.last_action = action
+                self.session.last_request_state = 'pending'
+            else:
+                # Preserve the original retry context across failures/cancel:
+                # a retry of a completed turn keeps replacing that same pair.
+                self.session.last_request_state = 'retrying_completed' if replace_last else 'pending'
             self.session.save()
         self.last_action = action
         self.pending_write = None
@@ -1871,8 +1890,9 @@ class WindowsApp:
                 return
             if not self.probe_busy:
                 self.probe_busy = True
-                provider = "Mirai" if self.is_mirai() else "DeepSeek" if self.is_deepseek else "Ollama"
                 probe_config = dict(self.config)
+                profile = selected_profile(probe_config)
+                provider = profile['name'] if profile else "Mirai" if self.is_mirai() else "DeepSeek" if self.is_deepseek else "Ollama"
                 self.state = "Đang kiểm tra kết nối " + provider
                 def probe():
                     try:

@@ -162,6 +162,8 @@ class CloudClient(DeepSeekClient):
             choice = data["choices"][0]
             finish = choice.get("finish_reason")
             answer = choice["message"].get("content")
+            from provider_protocols import check_answer_message
+            check_answer_message(choice["message"])
         except (KeyError, IndexError, TypeError, AttributeError):
             raise RuntimeError("Mirai trả phản hồi sai định dạng; clipboard giữ nguyên") from None
         if finish == "length":

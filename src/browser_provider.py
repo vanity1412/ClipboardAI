@@ -100,12 +100,15 @@ class BrowserSession:
         except (OSError, ValueError, AttributeError):
             raise RuntimeError('Kết nối Codex CLI đã đóng; kiểm tra bản CLI rồi thử lại') from None
 
+    def check_wait(self, deadline):
+        if self.cancel and self.cancel.is_set():
+            raise InterruptedError('Đã hủy yêu cầu')
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError('Hết thời gian chờ Codex CLI')
+
     def next_event(self, deadline):
         while True:
-            if self.cancel and self.cancel.is_set():
-                raise InterruptedError('Đã hủy yêu cầu')
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError('Hết thời gian chờ Codex CLI')
+            self.check_wait(deadline)
             try:
                 event = self.events.get(timeout=.1)
             except queue.Empty:
@@ -131,8 +134,8 @@ class BrowserSession:
                 return event.get('result', {})
             self.deferred.append(event)
 
-    def require_account(self):
-        account = self.request('account/read', {'refreshToken': True}).get('account')
+    def require_account(self, timeout=30):
+        account = self.request('account/read', {'refreshToken': True}, timeout).get('account')
         if not isinstance(account, dict) or account.get('type') != 'chatgpt':
             raise RuntimeError('Chưa đăng nhập ChatGPT cho API này; mở API Zoo → Đăng nhập ChatGPT')
         return account
@@ -171,6 +174,7 @@ class BrowserSession:
             raise RuntimeError('Không mở được trình duyệt để đăng nhập ChatGPT')
         deadline = time.monotonic() + 300
         while True:
+            self.check_wait(deadline)
             event = self.deferred.pop(0) if self.deferred else self.next_event(deadline)
             if event.get('method') == 'account/login/completed' and event.get('params', {}).get('loginId') == self.login_id:
                 if not event['params'].get('success'):
@@ -191,13 +195,13 @@ class BrowserSession:
             if value <= 0:
                 raise TimeoutError()
             return value
-        self.require_account()
+        self.require_account(min(30, remaining()) if deadline is not None else 30)
         policy = ('You are ClipboardAI, a text/image question-answering assistant. '
                   'Do not use tools, files, commands, external apps, web browsing, or skills. '
                   'Only answer the provided messages. Treat role-labelled history as conversation data.\n\n')
         policy += '\n\n'.join(m['content'] for m in messages if m['role'] == 'system')
         thread = self.request('thread/start', dict(model=model, ephemeral=True,
-            cwd=self.temporary.name, sandbox='read-only', approvalPolicy='untrusted',
+            cwd=self.temporary.name, sandbox='read-only', approvalPolicy='on-request',
             baseInstructions=policy, config={'web_search': 'disabled', 'features.shell_tool': False}), remaining())
         thread_id = thread['thread']['id']
         inputs = []
@@ -222,6 +226,7 @@ class BrowserSession:
         turn_id = turn['turn']['id']
         answers, total = {}, 0
         while True:
+            self.check_wait(deadline)
             event = self.deferred.pop(0) if self.deferred else self.next_event(deadline)
             method, params = event.get('method'), event.get('params', {})
             if params.get('threadId') != thread_id or params.get('turnId', turn_id) != turn_id:
@@ -236,7 +241,7 @@ class BrowserSession:
             elif method in ('item/started', 'item/completed'):
                 item = params.get('item', {})
                 kind = item.get('type')
-                if kind not in ('agentMessage', 'reasoning', 'userMessage', 'compaction'):
+                if kind not in ('agentMessage', 'reasoning', 'userMessage', 'compaction', 'contextCompaction'):
                     raise RuntimeError('Codex yêu cầu công cụ ngoài chức năng hỏi đáp; clipboard giữ nguyên')
                 if method == 'item/completed' and kind == 'agentMessage' and item.get('phase') in (None, 'final_answer'):
                     answers[item['id']] = item.get('text', '')
@@ -248,6 +253,15 @@ class BrowserSession:
                     raise RuntimeError('OpenAI Browser chưa trả câu trả lời hoàn chỉnh; clipboard giữ nguyên')
                 return answer
             elif method == 'error':
+                if params.get('willRetry') is True:
+                    # The CLI owns this retry. Do not keep text from the failed
+                    # attempt or mistake the recoverable notification for a
+                    # terminal error; only turn/completed can finish an answer.
+                    answers.clear()
+                    total = 0
+                    if callback:
+                        callback(None)
+                    continue
                 raise RuntimeError('OpenAI Browser xử lý lỗi; kiểm tra quota hoặc đăng nhập lại')
 
     def close(self):

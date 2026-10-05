@@ -59,6 +59,7 @@ class Session:
         self._load_failed = False
         self.last_request = ""
         self.last_action = "problem"
+        self.last_request_state = "pending"
         self.capture_text = ""
         self.capture_source = ""
         self.capture_pages = 0
@@ -144,10 +145,22 @@ class Session:
             raise ValueError('Invalid history policy')
         history = [dict(m, content=clean_legacy_text(m['content'])) if m['role'] == 'user' else dict(m) for m in messages]
         values['last_request'] = clean_legacy_text(values['last_request'])
+        # Older archives recorded only the text, so retain their completed-turn
+        # regeneration behavior when the final pair matches. New requests carry
+        # explicit provenance: equal text alone never proves a turn completed.
+        request_state = data.get('last_request_state')
+        if request_state is None:
+            completed = (bool(values['last_request']) and len(history) >= 2
+                and history[-2]['role'] == 'user' and history[-1]['role'] == 'assistant'
+                and history[-2]['content'] in (values['last_request'], values['last_request'] + '\n[Ảnh đính kèm]'))
+            request_state = 'completed' if completed else 'pending'
+        if request_state not in ('pending', 'completed', 'retrying_completed'):
+            raise ValueError('Invalid last request state')
         return dict(values, messages=deepcopy(history), mode=normalize_mode(mode), auto_copy=auto_copy,
                     copy_modes={str(normalize_mode(int(k))): v for k, v in copies.items()}, summary=summary, summary_count=count,
                     history_full=True,
-                    capture_pages=pages, capture_missing=list(missing), updated_at=updated)
+                    capture_pages=pages, capture_missing=list(missing), updated_at=updated,
+                    last_request_state=request_state)
 
     def _load(self, record):
         for name, value in record.items():
@@ -156,6 +169,7 @@ class Session:
     def _snapshot(self):
         return dict(messages=self.messages, problem=self.problem, last_answer=self.last_answer,
                     last_request=self.last_request, last_action=self.last_action,
+                    last_request_state=self.last_request_state,
                     mode=self.mode, auto_copy=self.auto_copy, capture_text=self.capture_text,
                     copy_modes=self.copy_modes, summary=self.summary, summary_count=self.summary_count,
                     history_full=self.history_full,
@@ -176,7 +190,7 @@ class Session:
             records[self.active_id] = record
             temporary = self.path.with_suffix(".tmp")
             # Keep the active fields for compatibility with existing utilities.
-            temporary.write_text(json.dumps(dict(record, version=4, active_id=self.active_id,
+            temporary.write_text(json.dumps(dict(record, version=5, active_id=self.active_id,
                 sessions=[dict(value, id=ident) for ident, value in records.items()]), ensure_ascii=False), encoding="utf-8")
             temporary.replace(self.path)
             self._sessions = records
@@ -236,6 +250,7 @@ class Session:
         self.summary, self.summary_count = "", 0
         self.last_request = ""
         self.last_action = "problem"
+        self.last_request_state = "pending"
         self.clear_capture(save=False)
         if self._load_failed and self.path.exists():
             try:
@@ -283,6 +298,7 @@ class Session:
         if problem is not None:
             self.problem = problem
         self.last_answer = answer
+        self.last_request_state = 'completed'
         return self.save()
 
     def set_mode(self, mode):

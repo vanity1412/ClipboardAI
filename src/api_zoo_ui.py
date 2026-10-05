@@ -11,6 +11,34 @@ from provider_catalog import PRESETS, preset_for, suggestions, api_key_page
 from browser_provider import BrowserSession
 
 
+def model_choice(value, label):
+    value = value.strip()
+    if len(value) > 200 or any(character.isspace() for character in value):
+        raise ValueError(label + ' không hợp lệ: tối đa 200 ký tự, không chứa khoảng trắng.')
+    return value
+
+
+def catalog_result(event, pending_token, selected_id, choices, edited_choices=(), preserve_empty_vision=False):
+    """Keep valid metadata separate from a form the user may still be editing."""
+    if event[0] != 'models' or event[1] != pending_token or event[2]['id'] != selected_id:
+        return None
+    profile = update_catalog(event[2], event[3])
+    form_choices = {field: profile[field] for field in ('model', 'vision_model')}
+    capabilities = {item['id']: item['vision'] for item in event[3]}
+    for field in ('model', 'vision_model'):
+        chosen = choices[field].strip()
+        preserve = bool(chosen) or field in edited_choices or field == 'vision_model' and preserve_empty_vision
+        if preserve and not (field == 'vision_model' and capabilities.get(chosen) is False):
+            form_choices[field] = chosen
+            try:
+                profile[field] = model_choice(chosen, field)
+            except ValueError:
+                # A partial/invalid entry stays in the widget and is reported on
+                # Save; it must not poison another profile's metadata or save.
+                pass
+    return profile, form_choices
+
+
 def open_editor(root_path, config, results):
     import tkinter as tk
     from tkinter import ttk, messagebox
@@ -57,6 +85,12 @@ def open_editor(root_path, config, results):
         entries[field] = entry
     form.columnconfigure(1, weight=1)
     model, vision = tk.StringVar(), tk.StringVar()
+    edited_choices, updating_choices = set(), [False]
+    def choice_changed(field):
+        if not updating_choices[0]:
+            edited_choices.add(field)
+    model.trace_add('write', lambda *_: choice_changed('model'))
+    vision.trace_add('write', lambda *_: choice_changed('vision_model'))
     ttk.Label(form, text='Model trả lời').grid(row=4, column=0, sticky='w', pady=3)
     chooser = ttk.Combobox(form, name='model', textvariable=model, state='normal')
     chooser.grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=3)
@@ -95,7 +129,8 @@ def open_editor(root_path, config, results):
             selected[0] = uuid.uuid4().hex
         p['id'] = selected[0]
         p['name'] = p['name'] or urlsplit(p['base_url']).hostname or 'API'
-        p.update(provider=protocol[0], model=model.get().strip(), vision_model=vision.get().strip(), enabled=True)
+        p.update(provider=protocol[0], model=model_choice(model.get(), 'Model trả lời'),
+                 vision_model=model_choice(vision.get(), 'Model đọc ảnh'), enabled=True)
         p.setdefault('priority', len(data['profiles']))
         p.setdefault('timeout', 0)
         p.setdefault('max_tokens', 0)
@@ -114,8 +149,13 @@ def open_editor(root_path, config, results):
     def set_catalog(catalog, selected_model='', selected_vision=''):
         chooser['values'] = [m['id'] for m in catalog]
         image_chooser['values'] = [m['id'] for m in catalog if m['vision'] is not False]
-        model.set(selected_model)
-        vision.set(selected_vision)
+        updating_choices[0] = True
+        try:
+            model.set(selected_model)
+            vision.set(selected_vision)
+        finally:
+            updating_choices[0] = False
+        edited_choices.clear()
 
     def choose_preset(_=None):
         invalidate()
@@ -298,7 +338,12 @@ def open_editor(root_path, config, results):
                         browser_ready.discard(event[2]['id'])
                         status.set('Đã đăng xuất phiên ChatGPT của API này. Đăng nhập lại trước khi gửi.')
                         continue
-                    p = update_catalog(event[2], event[3])
+                    applied = catalog_result(event, pending[0], selected[0],
+                        {'model': model.get(), 'vision_model': vision.get()}, edited_choices,
+                        preserve_empty_vision=any(old['id'] == event[2]['id'] for old in data['profiles']))
+                    if applied is None:
+                        continue
+                    p, form_choices = applied
                     if p['provider'] == 'codex':
                         browser_ready.add(p['id'])
                     selected[0] = p['id']
@@ -306,7 +351,7 @@ def open_editor(root_path, config, results):
                     data['profiles'] = [old for old in data['profiles'] if old['id'] != p['id']] + [p]
                     if not fields['name'].get():
                         fields['name'].set(p['name'])
-                    set_catalog(p['models'], p['model'], p['vision_model'])
+                    set_catalog(p['models'], form_choices['model'], form_choices['vision_model'])
                     redraw()
                     status.set(f'Đã lấy {len(p["models"])} model. Danh sách không bảo đảm quota/quyền gọi; chọn model rồi Lưu.')
                 else:

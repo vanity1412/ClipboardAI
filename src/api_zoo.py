@@ -256,11 +256,17 @@ def update_catalog(profile, catalog):
     ids = {m['id'] for m in catalog}
     if p['model'] not in ids:
         p['model'] = catalog[0]['id'] if catalog else ''
-    if p['vision_model'] not in ids:
+    if p['vision_model'] not in ids or not model_supports_vision(p, p['vision_model']):
         p['vision_model'] = next((m['id'] for m in catalog if m['vision'] is True), '')
         if not p['vision_model']:
             p['vision_model'] = next((m['id'] for m in catalog if m['id'] == p['model'] and m['vision'] is None), '')
     return validate({'profiles': [p]})['profiles'][0]
+
+
+def model_supports_vision(profile, model):
+    """Unknown/manual model capabilities stay usable; explicit false is final."""
+    return bool(model) and not any(m['id'] == model and m.get('vision') is False
+                                   for m in profile.get('models', []))
 
 
 def probe_profile(profile, auth_root=None):
@@ -274,7 +280,7 @@ class ZooRouter:
 
     def run(self, config, selected, vision, call, cancel=None, notify=None):
         data = config['API_ZOO']
-        profiles = sorted((p for p in data['profiles'] if p['enabled'] and (p['api_key'] or p['provider'] == 'codex') and p['model'] and (not vision or p['vision_model'])),
+        profiles = sorted((p for p in data['profiles'] if p['enabled'] and (p['api_key'] or p['provider'] == 'codex') and p['model'] and (not vision or model_supports_vision(p, p['vision_model']))),
                           key=lambda p: (p['id'] != selected['id'], p['model'] != selected['model'], p['priority']))
         if not data['auto']:
             profiles = [p for p in profiles if p['id'] == selected['id']]
@@ -282,7 +288,8 @@ class ZooRouter:
             raise RuntimeError('API Zoo thiếu key hoặc model đọc ảnh; kiểm tra cấu hình')
         attempts, last = 0, None
         for profile in profiles:
-            identity = (profile['id'], profile['base_url'], profile['api_key'], profile['model'])
+            active_model = profile['vision_model'] if vision else profile['model']
+            identity = (profile['id'], profile['base_url'], profile['api_key'], active_model)
             credential = ('key', profile['base_url'], profile['api_key'], profile['id'] if profile['provider'] == 'codex' else '')
             if max(self.cooldowns.get(identity, 0), self.cooldowns.get(credential, 0)) > time.monotonic():
                 continue

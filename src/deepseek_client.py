@@ -115,6 +115,8 @@ class DeepSeekClient(AIClient):
             choice = data["choices"][0]
             finish = choice.get("finish_reason")
             answer = choice["message"].get("content")
+            from provider_protocols import check_answer_message
+            check_answer_message(choice["message"])
         except (KeyError, IndexError, TypeError, AttributeError):
             raise AIResponseError("DeepSeek trả phản hồi sai định dạng; clipboard giữ nguyên.", "response_format") from None
         # Retain counts only, never content/reasoning/keys or raw provider errors.
