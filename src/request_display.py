@@ -56,6 +56,11 @@ class RequestDisplay:
     error: str = ''
     image: bool = False
     notice: str = ''
+    shortcut_names: dict = field(default_factory=dict)
+
+    def hint(self, text):
+        return re.sub(r'Shift\+F(?:10|9|8)|F(?:10|9|8|7|6|4|3)\b',
+                      lambda match: self.shortcut_names.get(match.group(), match.group()), text)
     _cached_answer: str | None = None
     _unknown: list = field(default_factory=list)
     _answer_rows: list = field(default_factory=list)
@@ -87,7 +92,7 @@ class RequestDisplay:
         if self.phase != 'done':
             return [HoverPage(self.preview().splitlines())]
         unknown, _ = self.answer_details()
-        hint = 'Shift+F8 để copy' if self.copy in ('changed', 'error', 'manual') else ''
+        hint = self.hint('Shift+F8 để copy') if self.copy in ('changed', 'error', 'manual') else ''
         return answer_pages(self.header(), self._all_answer_rows, unknown,
                             self._uncertain_reason, hint, measure, width)
 
@@ -114,7 +119,7 @@ class RequestDisplay:
         if self.phase == 'running':
             return f'{self.stage} · {seconds}s' if self.started is not None else self.stage
         if self.phase == 'failed':
-            return failure_hint(self.error) + f' · {seconds}s'
+            return self.hint(failure_hint(self.error)) + f' · {seconds}s'
         if self.phase == 'cancelled':
             return f'Đã hủy · {seconds}s'
         if self.phase == 'done':
@@ -122,7 +127,7 @@ class RequestDisplay:
                      'changed': 'Có kết quả · clipboard đã đổi', 'error': 'Có kết quả · copy lỗi',
                      'manual': 'Có kết quả · chưa copy'}[self.copy]
             return f'{label} · {seconds}s'
-        return self.notice or 'Đang chờ · F4 ảnh / F8 chữ'
+        return self.notice or self.hint('Đang chờ · F4 ảnh / F8 chữ')
 
     def preview(self, now=None):
         rows = [self.header(now)]
@@ -147,9 +152,9 @@ class RequestDisplay:
             if warning:
                 rows.append(warning)
             if hint:
-                rows.append(hint)
+                rows.append(self.hint(hint))
         elif self.phase == 'running':
-            rows.append(self.notice or ('F10 hủy · chờ để nhận kết quả' if self.image else 'F10 để hủy'))
+            rows.append(self.hint(self.notice or ('F10 hủy · chờ để nhận kết quả' if self.image else 'F10 để hủy')))
         elif self.phase == 'failed' and self.image and 'model' not in self.error.lower():
-            rows.append('Shift+F10 gửi ảnh cũ · F4 chụp mới')
+            rows.append(self.hint('Shift+F10 gửi ảnh cũ · F4 chụp mới'))
         return '\n'.join(rows[:5])

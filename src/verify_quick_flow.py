@@ -28,7 +28,7 @@ def run(native):
             with patch.object(native, 'setup_winapi', return_value=(user, kernel, tray)), \
                     patch.object(native.WindowsApp, 'register_hotkeys', lambda app: None):
                 app = native.WindowsApp(self_test=True, config_override={
-                    'BACKEND': 'DeepSeek', 'DEEPSEEK_MODEL': 'deepseek-flash',
+                    'BACKEND': 'DeepSeek', 'DEEPSEEK_MODEL': 'deepseek-flash', 'F4_CAPTURE': 'window',
                     'DEEPSEEK_API_KEY': 'test', 'ANSWER_STYLE': 'short'})
             # Avoid worker races when testing synthetic done/hover callbacks.
             app.read_clipboard = Mock(return_value=('Câu 1: Chọn phương án đúng', 12))

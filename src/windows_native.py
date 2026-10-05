@@ -31,6 +31,8 @@ from runtime_settings import (DEEPSEEK_TOKEN_CEILING, DEEPSEEK_DEFAULT_MAX_TOKEN
                               validated_preferences, save_preferences)
 
 ROOT = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+from hotkey_settings import (bindings as hotkey_bindings, DEFAULTS as HOTKEY_DEFAULTS,
+                             normalized_shortcuts, disabled_actions)
 PROMPT = CODE_PROMPT
 MAX_STREAM_RECORD_BYTES = 32 * 1024 * 1024
 REPAIR = ""
@@ -474,6 +476,9 @@ class WindowsApp:
         self.hover_text = ""
         self.tray_version4 = False
         self.capture_pending = False
+        self.region_pending = False
+        self.region_cancel = threading.Event()
+        self.region_token = 0
         self.enabled = True
         self.jobs = queue.Queue(maxsize=1)
         self.results = queue.Queue()
@@ -664,7 +669,10 @@ class WindowsApp:
         max_width = min(330, max(24, rect.right - rect.left - 16))
         from hover_layout import MAX_HOVER_HEIGHT, MAX_HOVER_ROWS, page_index
         display = self.display_state()
+        if getattr(self, 'region_notice', ''):
+            display = RequestDisplay(notice=self.region_notice)
         storage_error = getattr(getattr(self, 'session', None), 'error', '')
+        shortcut_error = ', '.join(getattr(self, 'hotkey_errors', []))
         # Cache the measured layout; only its page changes while hovering.
         dc = self.user.GetDC(self.hover_window)
         font = getattr(self, 'hover_font', None)
@@ -678,13 +686,16 @@ class WindowsApp:
                 return size.cx
             return len(value) * 8
         try:
-            key = (display.phase, display.header(), display.answer, storage_error, max_width)
+            key = (display.phase, display.header(), display.answer, storage_error, shortcut_error, max_width)
             now = time.monotonic()
             if key != getattr(self, 'hover_layout_key', None):
                 self.hover_pages = display.hover_pages(measure, max_width)
                 if storage_error:
                     for page in self.hover_pages:
                         page.rows[0] = 'Chưa lưu lịch sử · ' + page.rows[0]
+                if shortcut_error:
+                    for page in self.hover_pages:
+                        page.rows[0] = 'Phím chưa bật: ' + shortcut_error + ' · ' + page.rows[0]
                 self.hover_layout_key = key
                 self.hover_page_started = now
             self.hover_page = page_index(now, getattr(self, 'hover_page_started', now), len(self.hover_pages))
@@ -712,9 +723,15 @@ class WindowsApp:
         self.user.SetWindowPos(self.hover_window, W.HWND(-1), x, y, width, height, 0x10 | 0x40)
 
     def result_text(self):
+        if getattr(self, 'region_notice', ''):
+            return self.region_notice
         session = getattr(self, 'session', None)
         error = getattr(session, 'error', '')
         value = self.display_state().preview()
+        if getattr(self, 'hotkey_errors', []):
+            rows = value.splitlines()
+            rows.insert(1, 'Phím chưa bật: ' + ', '.join(self.hotkey_errors))
+            value = '\n'.join(rows)
         if error:
             rows = value.splitlines()
             rows.insert(1, 'Chưa lưu được lịch sử' if 'lưu' in error.lower() else 'Có lỗi lưu phiên')
@@ -729,6 +746,7 @@ class WindowsApp:
                 self.request_display.stage = 'Model đang xử lý'
             elif getattr(getattr(self, 'session', None), 'last_answer', ''):
                 self.request_display.finish('done', 0, self.session.last_answer)
+        self.request_display.shortcut_names = {name: self.key_label(i) for i, name in HOTKEY_DEFAULTS.items()}
         return self.request_display
 
     def create_panel(self):
@@ -766,6 +784,7 @@ class WindowsApp:
         if self.is_deepseek:
             self.user.EnableWindow(self.controls["model"], False)
         self.control("apply", "BUTTON", "Lưu cấu hình", 600, 668, 135, 30, 116)
+        self.control("hotkeys", "BUTTON", "Cài đặt phím tắt", 205, 310, 180, 30, 665)
         self.control("note", "STATIC", "F3×2: Wi-Fi/LAN. F4: chụp đề. F6: chọn phiên. F8: bài mới. F9: phản hồi. F10: hủy AI.", 15, 710, 940, 35)
         self.control("menu", "BUTTON", "Menu", 540, 10, 80, 28, 216)
         self.set_text("problem_label", "Câu hỏi · Enter gửi · Shift+Enter xuống dòng")
@@ -773,7 +792,7 @@ class WindowsApp:
         self.set_text("send", "Gửi")
         self.set_text("new", "Phiên mới")
         self.set_text("repair", "Gửi phản hồi")
-        self.set_text("note", "F7 mở/ẩn · F4 ảnh · F6 phiên · F8 mới · F9 hỏi tiếp · F10 hủy")
+        self.set_text("note", self.shortcut_help())
         self.set_text("problem", "" if is_chat(self.session.mode) else self.session.problem)
         self.input_callback = self.callback_type(self.input_proc)
         setter = window_long_setter(self.user)
@@ -800,7 +819,8 @@ class WindowsApp:
             layout.update(config_label=(12, 130, width - 24, 38), model=(12, 175, width - 24, 28),
                           ctx=(12, 218, 110, 28), predict=(138, 218, 110, 28), timeout=(264, 218, 110, 28),
                           apply=(12, 264, 135, 30), probe=(160, 264, 150, 30), pause=(12, 310, 180, 30),
-                          clear=(205, 310, 135, 30), note=(12, 360, width - 24, 65))
+                          hotkeys=(205, 310, 180, 30), clear=(12, 350, 135, 30),
+                          note=(12, 390, width - 24, 65))
             self.set_text('config_label', 'Model / Ký tự lịch sử / Token / Timeout (0=tắt)')
             if selected_profile(self.config):
                 layout.pop('predict')
@@ -922,10 +942,13 @@ class WindowsApp:
         if not self.controls:
             return
         value = self.display_state().header()
+        if getattr(self, 'region_notice', ''):
+            value = self.region_notice
         if not self.busy and self.display_state().phase == 'idle':
             value = self.state
         self.set_text("status", value + (' · Phím tắt tạm dừng' if not self.enabled else ''))
         self.set_text("details", f"{getattr(self, 'last_api_used', '') or self.model_name()} · {len(self.session.messages)} tin nhắn")
+        self.set_text('note', self.shortcut_help())
         self.set_text("pause", "Tạm dừng phím tắt" if self.enabled else "Bật phím tắt")
         for name in ("send", "retry", "code", "repair", "apply", "mode"):
             self.user.EnableWindow(self.controls[name], not (self.busy or getattr(self, "network_busy", False)))
@@ -946,30 +969,100 @@ class WindowsApp:
 
     def register_hotkeys(self):
         self.hotkey_errors = []
-        keys = [(201, 0x77, "F8"), (202, 0x78, "F9"), (203, 0x79, "F10"), (207, 0x75, "F6"), (209, 0x72, "F3"), (212, 0x76, "F7")]
-        if self.config.get("DEEPSEEK_MODEL") == "deepseek-flash":
-            keys.append((204, 0x73, "F4"))
-        for ident, key, name in keys:
-            if self.user.RegisterHotKey(self.hwnd, ident, 0x4000, key):
+        self.hotkeys = []
+        for ident, (name, modifiers, key) in hotkey_bindings(self.config.get('HOTKEYS'), self.config.get('HOTKEYS_DISABLED')).items():
+            if ident in (204, 214) and self.config.get('DEEPSEEK_MODEL') != 'deepseek-flash':
+                continue
+            if self.user.RegisterHotKey(self.hwnd, ident, 0x4000 | modifiers, key):
                 self.hotkeys.append(ident)
             else:
                 self.hotkey_errors.append(name)
-        if self.user.RegisterHotKey(self.hwnd, 213, 0x4000 | 0x4, 0x79):
-            self.hotkeys.append(213)
-        else:
-            self.hotkey_errors.append('Shift+F10')
-        if self.user.RegisterHotKey(self.hwnd, 215, 0x4004, 0x77):
-            self.hotkeys.append(215)
-        else:
-            self.hotkey_errors.append('Shift+F8')
-        if self.config.get('DEEPSEEK_MODEL') == 'deepseek-flash':
-            if self.user.RegisterHotKey(self.hwnd, 214, 0x4004, 0x78):
-                self.hotkeys.append(214)
-            else:
-                self.hotkey_errors.append('Shift+F9')
         if self.hotkey_errors:
-            self.state = "Phím bị ứng dụng khác chiếm: " + ", ".join(self.hotkey_errors) + "; dùng menu tray"
+            self.state = 'Phím bị ứng dụng khác chiếm: ' + ', '.join(self.hotkey_errors) + '; dùng menu tray'
             self.tooltip(self.state)
+
+    def shortcut_help(self):
+        disabled = self.config.get('HOTKEYS_DISABLED', [])
+        return ' · '.join(self.key_label(i) + ' ' + name for i, name in
+                          ((204, 'ảnh'), (207, 'phiên'), (201, 'mới'), (202, 'hỏi tiếp'), (203, 'hủy'))
+                          if str(i) not in disabled) or 'Phím tắt đã tắt · dùng menu tray'
+
+    def key_label(self, ident):
+        if str(ident) in getattr(self, 'config', {}).get('HOTKEYS_DISABLED', []):
+            return 'menu tray'
+        selected = getattr(self, 'config', {}).get('HOTKEYS', {})
+        return selected.get(str(ident), HOTKEY_DEFAULTS[ident]) if isinstance(selected, dict) else HOTKEY_DEFAULTS[ident]
+
+    def save_input_preferences(self, values):
+        path = ROOT / 'preferences.json'
+        prefs = validated_preferences(json.loads(path.read_text(encoding='utf-8-sig')))[0] if path.exists() else {}
+        save_preferences(path, dict(prefs, **values))
+        self.config.update(values)
+
+    def apply_hotkeys(self, selected, disabled=None):
+        hotkey_bindings(selected, disabled)
+        selected = normalized_shortcuts(selected)
+        disabled = disabled_actions(disabled)
+        previous = self.config.get('HOTKEYS', {})
+        previous_disabled = self.config.get('HOTKEYS_DISABLED', [])
+        values = {'HOTKEYS': selected, 'HOTKEYS_DISABLED': disabled}
+        editing = getattr(self, 'hotkey_open', False)
+        if getattr(self, 'region_pending', False):
+            raise ValueError('Hủy chọn vùng trước khi đổi phím.')
+        if not self.enabled:
+            self.save_input_preferences(values)
+            if editing:
+                for ident in self.hotkeys:
+                    self.user.UnregisterHotKey(self.hwnd, ident)
+                self.hotkeys = []
+            return
+        for ident in self.hotkeys:
+            self.user.UnregisterHotKey(self.hwnd, ident)
+        self.config['HOTKEYS'] = selected
+        self.config['HOTKEYS_DISABLED'] = disabled
+        try:
+            self.register_hotkeys()
+            if self.hotkey_errors:
+                raise ValueError('Phím bị ứng dụng khác chiếm: ' + ', '.join(self.hotkey_errors))
+            self.save_input_preferences(values)
+            if editing:
+                for ident in self.hotkeys:
+                    self.user.UnregisterHotKey(self.hwnd, ident)
+                self.hotkeys = []
+        except Exception:
+            for ident in self.hotkeys:
+                self.user.UnregisterHotKey(self.hwnd, ident)
+            self.config['HOTKEYS'] = previous
+            self.config['HOTKEYS_DISABLED'] = previous_disabled
+            if not editing:
+                self.register_hotkeys()
+            else:
+                self.hotkeys = []
+            raise
+
+    def open_hotkey_editor(self):
+        if self.busy or getattr(self, 'region_pending', False):
+            self.state = 'Chờ yêu cầu hiện tại xong hoặc hủy trước khi đổi phím'
+            self.tooltip(self.state)
+            return
+        if getattr(self, 'hotkey_open', False):
+            self.state = 'Cửa sổ đổi phím đã mở; xem trên thanh tác vụ'
+            self.tooltip(self.state)
+            return
+        from hotkey_settings import open_editor
+        self.hotkey_open = True
+        for ident in self.hotkeys:
+            self.user.UnregisterHotKey(self.hwnd, ident)
+        self.hotkeys = []
+        config = {'HOTKEYS': dict(self.config.get('HOTKEYS', {})),
+                  'HOTKEYS_DISABLED': list(self.config.get('HOTKEYS_DISABLED', []))}
+        def editor():
+            try:
+                open_editor(config, self.results)
+            except Exception:
+                self.results.put(('hotkey_closed',))
+                self.results.put(('probe', 'Không mở được cửa sổ đổi phím'))
+        threading.Thread(target=editor, daemon=True).start()
 
     def network_hotkey(self):
         if self.network_press.press(time.monotonic()):
@@ -1044,7 +1137,7 @@ class WindowsApp:
             elif text:
                 self.start_request(text, action='retry_chat', image_png=png if self.session.last_action == 'image' else None, replace=True, new_session=False)
             else:
-                self.state = 'Nhập câu hỏi trong F7 hoặc copy nội dung rồi F8'
+                self.state = 'Mở chat từ menu tray hoặc copy nội dung rồi F8'
         elif self.session.capture_text and not is_chat(self.session.mode):
             self.state = "Đề ảnh còn thiếu: " + "; ".join(self.session.capture_missing)[:130] + ". Cuộn tới phần thiếu rồi F4; chưa gửi bài cũ."
         elif not self.session.messages:
@@ -1104,7 +1197,7 @@ class WindowsApp:
             self.set_text("feedback", "")
             self.user.SendMessageW(self.controls["mode"], 0x14E, MENU_MODES.index(purpose_mode(self.session.mode)), 0)
             self.user.SendMessageW(self.controls["auto"], 0xF1, int(self.session.auto_copy), 0)
-            self.state = "Đã khôi phục phiên; F7 mở chat, F9 hỏi tiếp"
+            self.state = "Đã khôi phục phiên; mở chat từ menu tray, F9 hỏi tiếp"
             self.request_display = RequestDisplay()
             if self.session.last_answer:
                 self.request_display.finish('done', 0, self.session.last_answer)
@@ -1124,7 +1217,7 @@ class WindowsApp:
             entries = self.session.entries()
             commands = {}
             self.user.AppendMenuW(menu, 1, 0, "Hội thoại — chọn phiên để xem thao tác")
-            self.user.AppendMenuW(menu, 1 if self.busy else 0, 201, "Hội thoại mới từ clipboard — F8")
+            self.user.AppendMenuW(menu, 1 if self.busy else 0, 201, 'Hội thoại mới từ clipboard — ' + self.key_label(201))
             self.user.AppendMenuW(menu, 1 if self.busy else 0, 104, "Tạo phiên trống")
             if not entries:
                 self.user.AppendMenuW(menu, 1, 0, "Chưa có hội thoại")
@@ -1283,6 +1376,11 @@ class WindowsApp:
             self.user.DestroyMenu(menu)
 
     def cancel_request(self):
+        if getattr(self, 'region_pending', False):
+            self.region_cancel.set()
+            self.state = 'Đã hủy chọn vùng; clipboard và phiên giữ nguyên'
+            self.tooltip(self.state)
+            return
         model_elapsed = self.display_state().seconds()
         self.current_id += 1
         self.cancel_event.set()
@@ -1311,7 +1409,9 @@ class WindowsApp:
             self.state = "Phím tắt đang tạm dừng; bật lại trong menu tray"
         elif self.config.get("DEEPSEEK_MODEL") != "deepseek-flash":
             self.state = "Chụp ảnh chỉ có trong bản DeepSeek Flash"
-        elif self.busy:
+        elif getattr(self, 'network_busy', False):
+            self.state = 'Đang chuyển/đọc mạng; chờ xong rồi chụp'
+        elif self.busy or getattr(self, 'region_pending', False):
             self.state = ('Đang xử lý; chờ xong hoặc F10 hủy rồi Shift+F9 bổ sung ảnh' if append else
                           'Đang xử lý; chờ xong hoặc F10 hủy rồi F4 chụp câu hỏi mới')
             self.display_state().notice = 'F4 chưa gửi · F10 hủy hoặc chờ xong'
@@ -1334,19 +1434,91 @@ class WindowsApp:
                     text = 'Ảnh mới bổ sung cho yêu cầu trước trong phiên này. Dùng ảnh mới cùng dữ kiện và ảnh trước để cập nhật đáp án theo yêu cầu đã có; không coi đây là câu hỏi độc lập.'
                     if not self.session.messages:
                         text += '\nYêu cầu trước:\n' + self.session.last_request
-                self.start_request(text, sequence=value[1] if value else None,
-                    digest=fingerprint(value[0]) if value else None, screenshot_hwnd=hwnd,
-                    replace=True, action="image", new_session=not append)
+                if self.config.get('F4_CAPTURE', 'window') == 'region':
+                    self.start_region_capture(hwnd, text, value, append)
+                else:
+                    self.start_request(text, sequence=value[1] if value else None,
+                        digest=fingerprint(value[0]) if value else None, screenshot_hwnd=hwnd,
+                        replace=True, action="image", new_session=not append)
             except Exception:
                 self.state = 'Không chụp được cửa sổ; mở đề và nhấn ' + ('Shift+F9' if append else 'F4') + ' lại'
-        if not self.busy and self.current_id == attempt_id:
+        if not self.busy and not getattr(self, 'region_pending', False) and self.current_id == attempt_id:
             display = self.display_state()
             display.finish('failed', 0, error=self.state)
             display.image = True
         self.tooltip(self.state)
         self.refresh_panel()
 
+    def start_region_capture(self, hwnd, text, value, append):
+        from region_capture import select_region
+        if getattr(self, 'network_busy', False):
+            raise RuntimeError('Đang chuyển mạng')
+        self.hide_tray_result()
+        self.region_token = getattr(self, 'region_token', 0) + 1
+        token = self.region_token
+        cancel = self.region_cancel = threading.Event()
+        session_id = self.session.active_id
+        baseline = value if value else self.read_clipboard()
+        sequence = baseline[1] if baseline else self.user.GetClipboardSequenceNumber()
+        digest = fingerprint(baseline[0]) if baseline else None
+        cue = self.config.get('REGION_CUE', 'light')
+        import copy
+        self.region_config_snapshot = copy.deepcopy(self.config)
+        self.region_mode_snapshot = self.session.mode
+        self.region_pending = True
+        self.region_clipboard_hold = True
+        self.state = 'Kéo chọn vùng rồi thả chuột · Esc / ' + self.key_label(203) + ' hủy'
+        self.display_state().notice = self.state
+        self.region_notice = self.state
+        def capture():
+            png, error = None, ''
+            try:
+                png = select_region(hwnd, cancel, cue)
+            except Exception as exc:
+                log_event('region_capture_failed', error_type=type(exc).__name__)
+                from screen_capture import CaptureError
+                error = str(exc) if isinstance(exc, CaptureError) else 'Không chọn được vùng; mở đề rồi chụp lại'
+            self.results.put(('region_done', token, cancel, png, error, text, sequence, digest, append, session_id))
+        try:
+            threading.Thread(target=capture, daemon=True).start()
+        except Exception:
+            self.region_pending = False
+            cancel.set()
+            raise
+
+    def finish_region_capture(self, result):
+        _, token, cancel, png, error, text, sequence, digest, append, session_id = result
+        if (not getattr(self, 'region_pending', False) or token != getattr(self, 'region_token', 0)
+                or getattr(self, 'closed', threading.Event()).is_set()):
+            return
+        self.region_pending = False
+        config_changed = (getattr(self, 'region_config_snapshot', self.config) != self.config
+                          or getattr(self, 'region_mode_snapshot', self.session.mode) != self.session.mode)
+        if cancel.is_set() or png is None and not error:
+            self.state = 'Đã hủy chọn vùng; clipboard và phiên giữ nguyên'
+            self.display_state().notice = self.state
+        elif error:
+            self.state = error
+            self.display_state().notice = error
+        elif append and self.session.active_id != session_id:
+            self.state = 'Phiên đã đổi; chưa gửi ảnh. Chọn lại phiên rồi chụp.'
+            self.display_state().notice = self.state
+        elif config_changed:
+            self.state = 'Cấu hình AI đã đổi khi chọn vùng; chưa gửi ảnh. Chụp lại để dùng cấu hình mới.'
+            self.display_state().notice = self.state
+        else:
+            self.start_request(text, sequence=sequence, digest=digest, image_png=png,
+                               replace=True, action='image', new_session=not append)
+        if cancel.is_set() or error or png is None or config_changed or append and self.session.active_id != session_id:
+            self.region_notice = self.state
+        self.tooltip(self.state)
+        self.refresh_panel()
+
     def start_request(self, text, sequence=None, digest=None, action="problem", image_png=None, screenshot_hwnd=None, replace=False, capture_source="", capture_previous="", new_session=True):
+        if getattr(self, 'region_pending', False):
+            self.state = 'Đang chọn vùng; thả chuột để gửi hoặc Esc để hủy'
+            self.tooltip(self.state)
+            return
         if getattr(self, "network_busy", False):
             self.state = "Đang chuyển/đọc mạng; chờ xong rồi gửi AI"
             self.tooltip(self.state)
@@ -1418,6 +1590,8 @@ class WindowsApp:
         self.pending_write = None
         self.notice_until = 0
         self.preview_answer = ""
+        self.region_clipboard_hold = False
+        self.region_notice = ''
         self.preview_request = text if action != "capture" else ""
         self.last_api_used = ''
         self.state = ("Đang phân tích" if self.session.mode == ANALYSIS else "Đang trả lời") if is_chat(self.session.mode) else "Đang phân tích" if (self.session.mode == 2 and action != "code") or (self.session.mode == 1 and action == "problem") else "Đang sinh code"
@@ -1439,6 +1613,23 @@ class WindowsApp:
             self.render_conversation()
 
     def command(self, ident):
+        if getattr(self, 'region_pending', False):
+            if ident in (109, 203):
+                self.cancel_request()
+            return
+        if ident == 665:
+            self.open_hotkey_editor()
+            return
+        if ident in (680, 681, 682, 683):
+            name, value = {680: ('F4_CAPTURE', 'region'), 681: ('F4_CAPTURE', 'window'),
+                           682: ('REGION_CUE', 'light'), 683: ('REGION_CUE', 'clear')}[ident]
+            try:
+                self.save_input_preferences({name: value})
+                self.state = 'Đã lưu cách chụp / hiển thị vùng chọn'
+            except (OSError, ValueError):
+                self.state = 'Chưa lưu được lựa chọn; giữ cấu hình trước'
+            self.tooltip(self.state)
+            return
         if ident in (660, 661, 662, 663):
             if self.busy:
                 return
@@ -1601,7 +1792,8 @@ class WindowsApp:
             self.enabled = not self.enabled
             self.pending_write = None
             if self.enabled:
-                self.register_hotkeys()
+                if not getattr(self, 'hotkey_open', False):
+                    self.register_hotkeys()
             else:
                 for key_id in getattr(self, 'hotkeys', []):
                     self.user.UnregisterHotKey(self.hwnd, key_id)
@@ -1827,6 +2019,8 @@ class WindowsApp:
             if value is None:
                 self.state = 'Clipboard đang bận; nhấn Shift+F8 lại để copy đáp án'
             else:
+                self.region_clipboard_hold = False
+                self.region_notice = ''
                 self.pending_write = (answer, value[1], fingerprint(value[0]))
                 display = self.display_state()
                 if display.phase != 'done' or display.answer != answer:
@@ -1976,17 +2170,17 @@ class WindowsApp:
             self.active_status_menu = menu
             self.user.AppendMenuW(menu, 1, 0, self.last_menu_status)
             ai = self.user.CreatePopupMenu()
-            self.user.AppendMenuW(menu, 0, 3, "Mở chat — F7")
-            self.user.AppendMenuW(menu, 0, 207, "Hội thoại / thao tác phiên — F6")
-            self.user.AppendMenuW(menu, 0, 202, "Hỏi tiếp từ clipboard — F9")
+            self.user.AppendMenuW(menu, 0, 3, 'Mở chat')
+            self.user.AppendMenuW(menu, 0, 207, 'Hội thoại / thao tác phiên — ' + self.key_label(207))
+            self.user.AppendMenuW(menu, 0, 202, 'Hỏi tiếp từ clipboard — ' + self.key_label(202))
             self.user.AppendMenuW(menu, 0 if self.session.last_answer else 1, 111, "Copy đáp án của phiên đang chọn")
             can_copy = bool(getattr(self, 'last_completed_answer', '') or self.session.last_answer)
-            self.user.AppendMenuW(menu, 0 if can_copy else 1, 215, "Copy đáp án gần nhất — Shift+F8")
-            self.user.AppendMenuW(menu, 1 if self.busy else 0, 107, 'Gửi lại — Shift+F10')
+            self.user.AppendMenuW(menu, 0 if can_copy else 1, 215, 'Copy đáp án gần nhất — ' + self.key_label(215))
+            self.user.AppendMenuW(menu, 1 if self.busy else 0, 107, 'Gửi lại — ' + self.key_label(213))
             network = self.user.CreatePopupMenu()
-            self.user.AppendMenuW(network, 1 if self.network_busy else 0, 209, "Chọn mạng · Wi-Fi / LAN — F3×2")
+            self.user.AppendMenuW(network, 1 if self.network_busy else 0, 209, 'Chọn mạng · Wi-Fi / LAN — ' + self.key_label(209) + '×2')
             self.user.AppendMenuW(network, 0, 233, "Mở card mạng để khôi phục thủ công…")
-            self.user.AppendMenuW(menu, 0x10, network, "Mạng · Wi-Fi / LAN — F3×2")
+            self.user.AppendMenuW(menu, 0x10, network, 'Mạng · Wi-Fi / LAN — ' + self.key_label(209) + '×2')
             if 'API_ZOO' in self.config:
                 self.user.AppendMenuW(ai, 0, 220, 'Quản lý API Zoo…')
                 models = self.user.CreatePopupMenu()
@@ -2015,12 +2209,19 @@ class WindowsApp:
             if self.config.get("DEEPSEEK_MODEL") == "deepseek-flash":
                 capture = self.user.CreatePopupMenu()
                 image_only = self.config.get('F4_INPUT', 'image_clipboard') == 'image'
-                self.user.AppendMenuW(capture, 0, 204, 'Chụp và gửi ngay — F4')
-                self.user.AppendMenuW(capture, 1 if self.busy else 0, 214, 'Bổ sung ảnh vào phiên — Shift+F9')
+                self.user.AppendMenuW(capture, 0, 204, 'Chụp câu hỏi mới — ' + self.key_label(204))
+                self.user.AppendMenuW(capture, 1 if self.busy else 0, 214, 'Bổ sung ảnh vào phiên — ' + self.key_label(214))
+                self.user.AppendMenuW(capture, 0x800, 0, None)
+                region = self.config.get('F4_CAPTURE', 'region') == 'region'
+                light = self.config.get('REGION_CUE', 'light') == 'light'
+                self.user.AppendMenuW(capture, 8 if region else 0, 680, 'Kéo chọn vùng')
+                self.user.AppendMenuW(capture, 0 if region else 8, 681, 'Chụp cả cửa sổ')
+                self.user.AppendMenuW(capture, 8 if light else 0, 682, 'Dấu chọn: bốn góc nhạt')
+                self.user.AppendMenuW(capture, 0 if light else 8, 683, 'Dấu chọn: viền rõ hơn')
                 self.user.AppendMenuW(capture, 0x800, 0, None)
                 self.user.AppendMenuW(capture, 8 if image_only else 0, 231, 'Chỉ ảnh · không gửi clipboard')
                 self.user.AppendMenuW(capture, 0 if image_only else 8, 232, 'Ảnh + clipboard')
-                self.user.AppendMenuW(menu, 0x10, capture, 'Chụp ảnh — F4 · ' + ('Chỉ ảnh' if image_only else 'Kèm clipboard'))
+                self.user.AppendMenuW(menu, 0x10, capture, 'Chụp ảnh — ' + self.key_label(204) + ' · ' + ('Chỉ ảnh' if image_only else 'Kèm clipboard'))
             current = purpose_mode(self.session.mode)
             for mode in MENU_MODES:
                 self.user.AppendMenuW(modes, (8 if current == mode else 0) | (1 if self.busy else 0),
@@ -2055,9 +2256,10 @@ class WindowsApp:
                 self.user.AppendMenuW(menu, 0 if self.session.messages else 1, 108, 'Sinh code từ phân tích')
             self.user.AppendMenuW(modes, 8 if self.session.auto_copy else 0, 102, "Tự copy câu trả lời")
             if self.busy:
-                self.user.AppendMenuW(menu, 0, 109, "Hủy yêu cầu — F10")
+                self.user.AppendMenuW(menu, 0, 109, 'Hủy yêu cầu — ' + self.key_label(203))
             self.user.AppendMenuW(ai, 0, 103, "Tạm dừng / trả phím cho ứng dụng khác" if self.enabled else "Bật lại phím tắt")
             self.user.AppendMenuW(ai, 0, 221, "Cài đặt / kiểm tra kết nối")
+            self.user.AppendMenuW(ai, 0, 665, 'Cài đặt phím tắt…')
             self.user.AppendMenuW(menu, 0x10, ai, "Model / API / cài đặt")
             self.user.AppendMenuW(menu, 0, 2, "Thoát")
             point = W.POINT()
@@ -2133,6 +2335,27 @@ class WindowsApp:
             except queue.Empty:
                 break
             kind = result[0]
+            if kind == 'region_done':
+                self.finish_region_capture(result)
+                continue
+            if kind == 'hotkey_closed':
+                self.hotkey_open = False
+                if self.enabled:
+                    self.register_hotkeys()
+                self.state = ('Phím bị ứng dụng khác chiếm: ' + ', '.join(self.hotkey_errors)
+                              if self.hotkey_errors else 'Đã đóng cửa sổ đổi phím; phím tắt đang bật' if self.enabled else 'Phím tắt đang tạm dừng')
+                self.tooltip(self.state)
+                continue
+            if kind == 'hotkey_save':
+                try:
+                    self.apply_hotkeys(result[1], result[3] if len(result) > 3 else None)
+                    self.state = 'Đã lưu; đóng cửa sổ để bật phím mới' if getattr(self, 'hotkey_open', False) else 'Đã lưu phím tắt mới'
+                    self.refresh_panel()
+                    result[2].put(self.state)
+                except (ValueError, OSError) as exc:
+                    result[2].put((str(exc) if isinstance(exc, ValueError) else 'Không lưu được phím') + '; đã khôi phục bộ phím trước.')
+                self.tooltip(self.state)
+                continue
             if kind == 'model_started':
                 if result[1] == self.current_id and self.busy:
                     self.display_state().begin_model(result[2])
@@ -2312,7 +2535,7 @@ class WindowsApp:
                 self.render_conversation()
                 self.set_text('problem_label', 'Ảnh đã đính kèm · Nhập câu hỏi về ảnh' if getattr(self, 'pending_image', None) else 'Câu hỏi · Enter gửi · Shift+Enter xuống dòng')
             self.tooltip(self.state)
-        if self.pending_write:
+        if self.pending_write and not getattr(self, 'region_pending', False) and not getattr(self, 'region_clipboard_hold', False):
             try:
                 if self.write_clipboard(*self.pending_write):
                     self.pending_write = None
@@ -2338,7 +2561,8 @@ class WindowsApp:
                 import screen_capture
                 from PIL import ImageGrab
                 report["screenshot_module"] = callable(screen_capture.capture_foreground_png) and callable(ImageGrab.grab)
-            expected = 10 if self.config.get("DEEPSEEK_MODEL") == "deepseek-flash" else 8
+            expected = sum(i not in (204, 214) or self.config.get('DEEPSEEK_MODEL') == 'deepseek-flash'
+                           for i in hotkey_bindings(self.config.get('HOTKEYS'), self.config.get('HOTKEYS_DISABLED')))
             report["ok"] = len(self.hotkeys) == expected and not self.hotkey_errors and bool(self.notice)
             (ROOT / "self-test.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
             self.user.DestroyWindow(self.hwnd)
@@ -2365,7 +2589,16 @@ class WindowsApp:
                     self.menu()
                 return 0
             if msg == 0x0312:
-                log_event("hotkey", key={201: "F8", 202: "F9", 203: "F10", 204: "F4", 207: "F6", 209: "F3", 212: "F7", 213: "Shift+F10", 214: 'Shift+F9', 215: 'Shift+F8'}.get(wp, "unknown"))
+                if getattr(self, 'hotkey_open', False) or not getattr(self, 'enabled', True):
+                    return 0
+                shortcut_config = getattr(self, 'config', {})
+                if wp not in hotkey_bindings(shortcut_config.get('HOTKEYS'), shortcut_config.get('HOTKEYS_DISABLED')):
+                    return 0
+                if getattr(self, 'region_pending', False):
+                    if wp == 203:
+                        self.cancel_request()
+                    return 0
+                log_event("hotkey", key=self.key_label(wp))
                 if wp == 201:
                     self.send_clipboard()
                 elif wp == 202:
@@ -2379,8 +2612,6 @@ class WindowsApp:
                     self.session_menu()
                 elif wp == 209:
                     self.network_hotkey()
-                elif wp == 212:
-                    self.toggle_panel()
                 elif wp == 213:
                     if not self.busy:
                         self.resend_session()
@@ -2408,6 +2639,8 @@ class WindowsApp:
                 return 0
             if msg == 2:
                 self.closed.set()
+                if getattr(self, 'region_pending', False):
+                    self.region_cancel.set()
                 self.client.cancel()
                 if getattr(self, 'hover_window', None):
                     self.user.DestroyWindow(self.hover_window)

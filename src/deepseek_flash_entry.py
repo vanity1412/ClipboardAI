@@ -9,7 +9,10 @@ if __name__ == "__main__":
     native.AIClient = CloudClient
     native.read_config = lambda: load_cloud_config(native.ROOT, load_defaults(native.ROOT))
     try:
-        if '--verify-quick' in sys.argv:
+        if '--verify-region' in sys.argv:
+            from verify_region_capture import run
+            run(native.ROOT)
+        elif '--verify-quick' in sys.argv:
             import json
             from verify_quick_flow import run
             report = run(native)

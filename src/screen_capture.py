@@ -8,7 +8,7 @@ class CaptureError(RuntimeError):
     """Safe local capture error suitable for the compact status display."""
 
 
-def capture_foreground_png(hwnd=None):
+def capture_foreground_image(hwnd=None):
     from PIL import ImageGrab
     user = C.WinDLL("user32", use_last_error=True)
     user.GetForegroundWindow.restype = W.HWND
@@ -39,9 +39,19 @@ def capture_foreground_png(hwnd=None):
         image = ImageGrab.grab(bbox=box, all_screens=True)
         if all(high <= 3 for low, high in image.convert('RGB').getextrema()):
             raise CaptureError("Ảnh chụp toàn đen; chưa gửi AI. Cửa sổ có thể được bảo vệ hoặc đang trống; mở đề rồi F4.")
-        data = BytesIO()
-        image.save(data, format="PNG")
-        return data.getvalue()
+        return image, box
     finally:
         if previous:
             set_dpi(previous)
+
+
+def encode_png(image):
+    if all(high <= 3 for low, high in image.convert('RGB').getextrema()):
+        raise CaptureError('Vùng chọn toàn đen; chưa gửi AI. Chọn lại vùng có nội dung.')
+    data = BytesIO()
+    image.save(data, format='PNG')
+    return data.getvalue()
+
+
+def capture_foreground_png(hwnd=None):
+    return encode_png(capture_foreground_image(hwnd)[0])

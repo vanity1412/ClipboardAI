@@ -23,7 +23,7 @@ def run(native):
                 dict(role='user', content='Legacy example'), dict(role='assistant', content='int main(){}')],
                 last_answer='int main(){}')
             (native.ROOT / 'session.json').write_text(json.dumps(legacy), encoding='utf-8')
-            config = dict(BACKEND='DeepSeek', DEEPSEEK_MODEL='deepseek-flash', DEEPSEEK_API_KEY='test',
+            config = dict(BACKEND='DeepSeek', DEEPSEEK_MODEL='deepseek-flash', DEEPSEEK_API_KEY='test', F4_CAPTURE='window',
                           SELECTED_MODEL='deepseek-flash', MODEL_CHOICES=DEFAULT_MODELS)
             with patch.object(native.WindowsApp, 'register_hotkeys', lambda app: None):
                 app = native.WindowsApp(self_test=True, config_override=config)
@@ -72,10 +72,13 @@ def run(native):
             assert old['mode'] == 0 and old['last_answer'] == 'int main(){}'
             report['legacy_backup_and_chat_default'] = True
             app.window_proc(app.hwnd, 0x0312, 212, 0)
-            assert app.user.IsWindowVisible(app.hwnd)
-            app.window_proc(app.hwnd, 0x0312, 212, 0)
             assert not app.user.IsWindowVisible(app.hwnd)
-            report['f7_toggle'] = True
+            with patch.object(app.user, 'TrackPopupMenu', return_value=3):
+                app.menu()
+            assert app.user.IsWindowVisible(app.hwnd)
+            app.input_proc(app.controls['problem'], 0x100, 27, 0)
+            assert not app.user.IsWindowVisible(app.hwnd)
+            report['chat_manual_only'] = True
             # Native menu construction, no card mutation or API call.
             menu_rows = []
             original_append = app.user.AppendMenuW

@@ -24,7 +24,29 @@ def validated_preferences(data):
         return {}, ["preferences_file"]
     valid, invalid = {}, []
     for name, value in data.items():
-        if name == 'REPLY_MENU_VERSION':
+        if name == 'HOTKEYS':
+            from hotkey_settings import bindings, normalized_shortcuts
+            try:
+                if not isinstance(value, dict):
+                    raise ValueError('Invalid shortcuts')
+                bindings(value, data.get('HOTKEYS_DISABLED'))
+                valid[name] = normalized_shortcuts(value)
+            except ValueError:
+                invalid.append(name)
+        elif name == 'HOTKEYS_DISABLED':
+            from hotkey_settings import disabled_actions, bindings
+            try:
+                valid[name] = disabled_actions(value)
+                bindings(data.get('HOTKEYS'), valid[name])
+            except ValueError:
+                valid.pop(name, None)
+                invalid.append(name)
+        elif name in ('F4_CAPTURE', 'REGION_CUE'):
+            if value in (('region', 'window') if name == 'F4_CAPTURE' else ('light', 'clear')):
+                valid[name] = value
+            else:
+                invalid.append(name)
+        elif name == 'REPLY_MENU_VERSION':
             if type(value) is int and value == 1:
                 valid[name] = value
             else:
@@ -92,6 +114,8 @@ def load_runtime_settings(config, path):
     model = valid_base.get("OLLAMA_MODEL", "auto")
     thinking = model.startswith(("qwen3:", "qwen3.5:"))
     defaults = {
+        "F4_CAPTURE": "region",
+        "REGION_CUE": "light",
         "F4_INPUT": "image",
         "ANSWER_STYLE": "short",
         "OLLAMA_MODEL": model,
