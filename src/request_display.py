@@ -56,11 +56,15 @@ class RequestDisplay:
     error: str = ''
     image: bool = False
     notice: str = ''
+    feedback: str = ''
     shortcut_names: dict = field(default_factory=dict)
 
     def hint(self, text):
         return re.sub(r'Shift\+F(?:10|9|8)|F(?:10|9|8|7|6|4|3)\b',
                       lambda match: self.shortcut_names.get(match.group(), match.group()), text)
+
+    def show_feedback(self, message):
+        self.feedback = message
     _cached_answer: str | None = None
     _unknown: list = field(default_factory=list)
     _answer_rows: list = field(default_factory=list)
@@ -88,7 +92,10 @@ class RequestDisplay:
         return self._unknown, self._answer_rows
 
     def hover_pages(self, measure, width):
-        from hover_layout import HoverPage, answer_pages
+        from hover_layout import HoverPage, answer_pages, wrap_line, MAX_HOVER_ROWS
+        feedback = self.feedback
+        if feedback:
+            return [HoverPage(wrap_line(self.hint(feedback), measure, max(1, width - 12))[:MAX_HOVER_ROWS])]
         if self.phase != 'done':
             return [HoverPage(self.preview().splitlines())]
         unknown, _ = self.answer_details()
@@ -100,6 +107,7 @@ class RequestDisplay:
         self.phase, self.started = 'running', started
         self.stage = 'Đang chụp ảnh' if image else 'Đang chuẩn bị gửi AI'
         self.duration, self.answer, self.error, self.notice = 0, '', '', ''
+        self.feedback = ''
         self.copy, self.image = 'manual', image
 
     def begin_model(self, started):
@@ -113,8 +121,12 @@ class RequestDisplay:
     def finish(self, phase, duration, answer='', error='', copy='manual'):
         self.phase, self.duration, self.answer, self.error, self.copy = phase, duration, answer, error, copy
         self.notice = ''
+        self.feedback = ''
 
     def header(self, now=None):
+        feedback = self.feedback
+        if feedback:
+            return self.hint(feedback)
         seconds = self.seconds(now)
         if self.phase == 'running':
             return f'{self.stage} · {seconds}s' if self.started is not None else self.stage
@@ -131,6 +143,8 @@ class RequestDisplay:
 
     def preview(self, now=None):
         rows = [self.header(now)]
+        if self.feedback:
+            return rows[0]
         if self.phase == 'done':
             unknown, answer_rows = self.answer_details()
             warning = ''

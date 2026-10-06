@@ -711,7 +711,8 @@ class WindowsApp:
                 return size.cx
             return len(value) * 8
         try:
-            key = (display.phase, display.header(), display.answer, storage_error, shortcut_error, max_width)
+            key = (display.phase, display.header(), display.answer, display.copy,
+                   display.notice, storage_error, shortcut_error, max_width)
             now = time.monotonic()
             if key != getattr(self, 'hover_layout_key', None):
                 self.hover_pages = display.hover_pages(measure, max_width)
@@ -1130,6 +1131,7 @@ class WindowsApp:
         self.refresh_panel()
 
     def send_clipboard(self):
+        attempt_id = self.current_id
         if not self.enabled:
             self.state = "Phím tắt đang tạm dừng"
         else:
@@ -1144,10 +1146,13 @@ class WindowsApp:
                     self.pending_image = None
                     self.set_text("problem", text)
                     self.start_request(text, sequence, fingerprint(text), replace=True)
+        if self.current_id == attempt_id and not self.busy:
+            self.display_state().show_feedback(self.state)
         self.tooltip(self.state)
         self.refresh_panel()
 
     def resend_session(self):
+        attempt_id = self.current_id
         if not self.enabled:
             self.state = "Phím tắt đang tạm dừng"
         elif is_chat(self.session.mode):
@@ -1173,10 +1178,13 @@ class WindowsApp:
             text = self.session.last_request or next((m["content"] for m in reversed(self.session.messages) if m["role"] == "user"), self.session.problem)
             action = "problem" if self.session.last_action == "problem" and text != self.session.problem else "retry"
             self.start_request(text, action=action, replace=True, new_session=False)
+        if self.current_id == attempt_id and not self.busy:
+            self.display_state().show_feedback(self.state)
         self.tooltip(self.state)
         self.refresh_panel()
 
     def reply_clipboard(self):
+        attempt_id = self.current_id
         if not self.enabled:
             self.state = "Phím tắt đang tạm dừng"
         elif self.session.capture_text and not is_chat(self.session.mode):
@@ -1198,6 +1206,8 @@ class WindowsApp:
                 else:
                     chat = is_chat(self.session.mode)
                     self.start_request(text if chat else REPAIR + text, sequence, fingerprint(text), action="chat" if chat else "repair", replace=True, new_session=False)
+        if self.current_id == attempt_id:
+            self.display_state().show_feedback(self.state)
         self.tooltip(self.state)
         self.refresh_panel()
 
@@ -1543,15 +1553,18 @@ class WindowsApp:
             return
         if getattr(self, "network_busy", False):
             self.state = "Đang chuyển/đọc mạng; chờ xong rồi gửi AI"
+            self.display_state().show_feedback(self.state)
             self.tooltip(self.state)
             self.refresh_panel()
             return
         if self.busy and not replace:
             self.state = "Đang xử lý; nội dung mới giữ trong ô đề. Hủy hoặc chờ rồi bấm Gửi đề."
+            self.display_state().show_feedback(self.state)
             self.refresh_panel()
             return
         if not text.strip() or SECRET.search(text) or SECRET.search(capture_previous):
             self.state = "Nội dung trống hoặc có khóa/mật khẩu; chưa gửi"
+            self.display_state().show_feedback(self.state)
             self.refresh_panel()
             return
         signature = (action, text, screenshot_hwnd)
@@ -1569,6 +1582,7 @@ class WindowsApp:
                 raise ValueError("Đề/lịch sử quá dài; tăng context hoặc tạo bài mới. Không tự cắt đề.")
         except ValueError as exc:
             self.state = str(exc)
+            self.display_state().show_feedback(self.state)
             self.refresh_panel()
             return
         memory_messages = list(self.session.messages) if not fresh and action not in ('problem', 'capture') else []
@@ -2044,15 +2058,18 @@ class WindowsApp:
             getattr(self, 'last_completed_answer', '') or getattr(self.session, 'last_answer', ''))
         if not answer:
             self.state = 'Chưa có đáp án hoàn tất để copy'
+            self.display_state().show_feedback(self.state)
         else:
             value = self.read_clipboard()
             if value is None:
                 self.state = 'Clipboard đang bận; nhấn Shift+F8 lại để copy đáp án'
+                self.display_state().show_feedback(self.state)
             else:
                 self.region_clipboard_hold = False
                 self.region_notice = ''
                 self.pending_write = (answer, value[1], fingerprint(value[0]))
                 display = self.display_state()
+                display.feedback = ''
                 if display.phase != 'done' or display.answer != answer:
                     display.finish('done', 0, answer, copy='pending')
                 else:

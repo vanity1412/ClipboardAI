@@ -8,7 +8,7 @@ API Zoo có mẫu OpenAI, **OpenAI Browser/ChatGPT**, Claude, DeepSeek, Grok, Ge
 
 ## Bắt đầu
 
-1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi; không chạy cùng bản ClipboardAI cũ.
+1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi và chấp nhận UAC để chạy quyền admin; không chạy cùng bản ClipboardAI cũ. EXE tự yêu cầu quyền admin khi mở, nên thao tác chuyển card mạng không cần hỏi UAC lại.
 2. Chuột phải icon tray → Model / API / cài đặt → API Zoo. API Zoo là nơi thêm API, nhập key, chọn model và cấu hình API dự phòng. EXE không có key sẵn. Với ảnh, chọn model/API có hỗ trợ ảnh.
 3. Chọn mục đích `Hỏi đáp / phân tích` hoặc `Lập trình`; chọn prompt và mức suy luận riêng. Prompt có thể sửa/lưu từ menu.
 4. Copy câu hỏi → F8, hoặc đang xem câu hỏi/code → F4; chờ hoàn tất rồi Ctrl+V.

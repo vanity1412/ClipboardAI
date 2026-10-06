@@ -72,7 +72,7 @@ Danh sách API, model, card mạng và Wi-Fi phụ thuộc cấu hình và máy.
 
 F6 có **Hội thoại mới từ clipboard** và **Tạo phiên trống**. Mỗi phiên có **Chọn phiên**, **Mở chat**, **Gửi lại yêu cầu**, **Copy câu trả lời**, **Xóa ảnh đã thu thập**, **Lưu lại lịch sử**, **Xóa phiên**. Danh sách hiển thị tên và thời điểm cập nhật phiên.
 
-Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã lưu/chưa lưu và trạng thái kết nối. Có **Làm mới danh sách** và **Thiết lập trong Windows**. Mạng chưa lưu chuyển sang Windows để nhập mật khẩu. Chọn card có thể tắt các card Wi-Fi/LAN khác và yêu cầu UAC. Có mục mở card mạng để khôi phục thủ công.
+Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã lưu/chưa lưu và trạng thái kết nối. Có **Làm mới danh sách** và **Thiết lập trong Windows**. Mạng chưa lưu chuyển sang Windows để nhập mật khẩu. EXE yêu cầu quyền admin khi khởi động; chọn card có thể tắt các card Wi-Fi/LAN khác và không cần hỏi UAC lại. Khi chạy source bằng Python không có quyền admin, thao tác chuyển card vẫn yêu cầu UAC. Có mục mở card mạng để khôi phục thủ công.
 
 ## Các cửa sổ mở chủ động
 
