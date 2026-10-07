@@ -8,6 +8,8 @@ DEEPSEEK_DEFAULT_MAX_TOKENS = DEEPSEEK_TOKEN_CEILING
 DEEPSEEK_DEFAULT_TIMEOUT_S = 0
 
 NUMERIC_SETTINGS = {
+    'PANEL_WIDTH': (360, 1600, False),
+    'PANEL_HEIGHT': (480, 1400, False),
     "OLLAMA_NUM_CTX": (1024, 65536, False),
     "OLLAMA_NUM_PREDICT": (128, 32768, False),
     "OLLAMA_TIMEOUT_S": (30, 2147483647, True),
@@ -40,6 +42,11 @@ def validated_preferences(data):
                 bindings(data.get('HOTKEYS'), valid[name])
             except ValueError:
                 valid.pop(name, None)
+                invalid.append(name)
+        elif name == 'PANEL_POSITION':
+            if value in ('bottom_right', 'center'):
+                valid[name] = value
+            else:
                 invalid.append(name)
         elif name in ('F4_CAPTURE', 'REGION_CUE'):
             if value in (('region', 'window') if name == 'F4_CAPTURE' else ('light', 'clear')):
@@ -118,6 +125,7 @@ def load_runtime_settings(config, path):
     model = valid_base.get("OLLAMA_MODEL", "auto")
     thinking = model.startswith(("qwen3:", "qwen3.5:"))
     defaults = {
+        'PANEL_WIDTH': '420', 'PANEL_HEIGHT': '560', 'PANEL_POSITION': 'bottom_right',
         "F4_CAPTURE": "region",
         "REGION_CUE": "light",
         "F4_INPUT": "image",

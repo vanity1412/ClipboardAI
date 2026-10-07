@@ -60,7 +60,7 @@ class HoverLayoutTests(unittest.TestCase):
             value = '\n'.join(page.rows)
             self.assertIn('clipboard đã đổi', value)
             self.assertIn('Chưa rõ: 7', value)
-            self.assertIn('Shift+F8', value)
+            self.assertIn('F7', value)
             self.assertLessEqual(len(page.rows), MAX_HOVER_ROWS)
 
     def test_single_long_word_is_not_discarded(self):

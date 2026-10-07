@@ -169,7 +169,7 @@ class SelectedFixTests(unittest.TestCase):
             app.hotkeys, app.hotkey_errors = [], []
             app.user.RegisterHotKey.return_value = True
             app.register_hotkeys()
-            app.user.RegisterHotKey.assert_any_call(app.hwnd, 215, 0x4004, 0x77)
+            app.user.RegisterHotKey.assert_any_call(app.hwnd, 215, 0x4000, 0x76)
 
     def test_copy_last_answer_without_result_or_with_locked_clipboard_is_explicit(self):
         with tempfile.TemporaryDirectory() as root:
@@ -185,7 +185,7 @@ class SelectedFixTests(unittest.TestCase):
             app.copy_last_answer()
             self.assertIsNone(app.pending_write)
             self.assertIn('Clipboard', app.state)
-            self.assertIn('Shift+F8', app.state)
+            self.assertIn('F7', app.state)
             app.client.ask.assert_not_called()
 
     def test_shift_f8_keeps_last_complete_answer_when_f4_or_f8_starts_new_session(self):

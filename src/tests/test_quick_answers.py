@@ -94,7 +94,7 @@ class QuickAnswerTests(unittest.TestCase):
             app.user.RegisterHotKey.return_value = True
             app.register_hotkeys()
             app.user.RegisterHotKey.assert_any_call(app.hwnd, 214, 0x4004, 0x78)
-            self.assertEqual(len(app.hotkeys), 9)
+            self.assertEqual(len(app.hotkeys), 10)
 
     def test_f8_deduplicates_but_f9_preserves_context(self):
         with tempfile.TemporaryDirectory() as root:

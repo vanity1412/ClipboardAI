@@ -22,6 +22,22 @@ class ManagerCleanupTests(unittest.TestCase):
 
 
 class HiddenImageManagerTests(unittest.TestCase):
+    def test_pre_cancelled_manager_returns_with_another_tk_window_alive(self):
+        other = self.tk.Tk(); other.withdraw()
+        original = self.tk.Tk
+        results, cancel = queue.Queue(), threading.Event()
+        cancel.set()
+        def factory():
+            root = original(); root.withdraw()
+            return root
+        try:
+            with patch('tkinter.Tk', factory):
+                image_manager.open_manager(SessionImages(), 'synthetic', results, cancel)
+            self.assertEqual(results.get_nowait(), ('images_closed',))
+            self.assertTrue(other.winfo_exists())
+        finally:
+            other.destroy()
+
     def setUp(self):
         import tkinter as tk
         self.tk = tk
@@ -46,6 +62,9 @@ class HiddenImageManagerTests(unittest.TestCase):
                 def exercise():
                     try:
                         items = descendants(root)
+                        chat = next(w for w in items if w.winfo_class() == 'Text')
+                        self.assertIn('Question about image', chat.get('1.0', 'end'))
+                        self.assertIn('Synthetic answer', chat.get('1.0', 'end'))
                         preview = next(w for w in items if w.winfo_class() == 'TLabel' and w.cget('image'))
                         self.assertTrue(preview.cget('image'))
                         delete = next(w for w in items if w.winfo_class() == 'TButton' and w.cget('text') == 'Xóa ảnh đang chọn')
@@ -60,7 +79,9 @@ class HiddenImageManagerTests(unittest.TestCase):
                 return root
             with patch('tkinter.Tk', factory), patch('tkinter._default_root', object()), \
                     patch('tkinter.messagebox.askyesno', return_value=True):
-                image_manager.open_manager(cache, 'a', results, threading.Event())
+                image_manager.open_manager(cache, 'a', results, threading.Event(), conversation={
+                    'title': 'Synthetic chat', 'messages': [{'role': 'user', 'content': 'Question about image'},
+                    {'role': 'assistant', 'content': 'Synthetic answer'}]})
             if errors:
                 raise errors[0]
             self.assertEqual(SessionImages(path).get('a'), [])

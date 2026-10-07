@@ -21,13 +21,14 @@ API Zoo có mẫu OpenAI, **OpenAI Browser/ChatGPT**, Claude, DeepSeek, Grok, Ge
 | Shift+F9 | Chụp ảnh bổ sung cho phiên hiện tại |
 | F10 | Hủy; giữ clipboard |
 | Shift+F10 | Gửi lại yêu cầu đã lưu |
-| Shift+F8 | Copy lại đáp án hoàn tất gần nhất |
+| F7 | Copy lại đáp án hoàn tất gần nhất |
+| Shift+F7 | Copy đáp án phiên đang chọn |
 | F6 | Chọn/quản lý phiên và đáp án |
 | F3 hai lần | Mở menu chọn card mạng/Wi-Fi |
 
-F4/F8 độc lập; F9/Shift+F9 dùng dữ kiện trước. Clipboard đổi trong lúc chạy sẽ được bảo vệ; dùng menu copy đáp án hoặc Shift+F8 để lấy lại kết quả. Không có cửa sổ chat tự bật khi trả lời. Menu `Tạm dừng` trả phím cho ứng dụng khác; không hủy yêu cầu đang chạy. Phím global có thể không bắt được trong app chạy quyền admin. Các phím đã đăng ký có thể chặn hành vi gốc.
+F4/F8 độc lập; F9/Shift+F9 dùng dữ kiện trước. Clipboard đổi trong lúc chạy sẽ được bảo vệ; dùng menu copy đáp án hoặc F7 để lấy lại kết quả. Không có cửa sổ chat tự bật khi trả lời. Menu `Tạm dừng` trả phím cho ứng dụng khác; không hủy yêu cầu đang chạy. Phím global có thể không bắt được trong app chạy quyền admin. Các phím đã đăng ký có thể chặn hành vi gốc.
 
-F7 không còn là phím của ClipboardAI. Muốn mở chat, chọn **Mở chat** trong menu tray; Esc trong ô nhập sẽ ẩn chat. Bộ phím mặc định còn lại được giữ nguyên, không áp một bộ phím riêng cho Chrome.
+F7 copy đáp án gần nhất; Shift+F7 copy đáp án phiên đang chọn. Muốn mở chat, chọn **Mở chat** trong menu tray; Esc trong ô nhập sẽ ẩn chat. Bộ phím mặc định còn lại được giữ nguyên, không áp một bộ phím riêng cho Chrome.
 
 ## Cài đặt phím tắt
 
@@ -89,7 +90,7 @@ API key được bảo vệ bằng Windows DPAPI cho tài khoản và máy hiệ
 
 Lưu lịch sử chạy nền theo thứ tự để giao diện tiếp tục phản hồi; file được ghi tạm, đồng bộ xuống đĩa rồi thay thế, và dữ liệu không đổi không bị ghi lại. Khi không ghi được file, đáp án hoàn tất vẫn có thể copy và app báo lỗi lưu; chọn **F6 → Lưu lại lịch sử** sau khi khôi phục quyền ghi/dung lượng. Thoát sẽ chờ lưu xong; nếu lưu thất bại, app giữ mở để bạn lưu lại hoặc copy kết quả.
 
-Giới hạn lịch sử API dùng đúng số ký tự cấu hình trong `SESSION_MAX_CHARS`; câu hỏi hiện tại được trừ khỏi phần dành cho lịch sử. Ảnh lưu theo phiên trong `session-images.sqlite3`, tự khôi phục khi mở lại app. Mở **Quản lý / xem ảnh của phiên…** từ tray hoặc F6 để xem, xóa từng ảnh hoặc toàn bộ ảnh. Giới hạn: 8 ảnh/32 MiB mỗi phiên, cache RAM 64 MiB, dữ liệu ảnh 256 MiB trên đĩa. Ảnh ra khỏi cache RAM có thể nạp lại; ảnh bị loại khỏi kho do giới hạn có cảnh báo để chụp lại. `status.log` xoay vòng khi đạt khoảng 2 MiB và giữ một bản `status.previous.log`; log không chứa câu hỏi, đáp án hay API key.
+Giới hạn lịch sử API dùng đúng số ký tự cấu hình trong `SESSION_MAX_CHARS`; câu hỏi hiện tại được trừ khỏi phần dành cho lịch sử. Ảnh lưu theo phiên trong `session-images.sqlite3`, tự khôi phục khi mở lại app. Mở **Ảnh & nội dung chat của phiên…** từ tray hoặc F6 để xem, xóa từng ảnh hoặc toàn bộ ảnh. Giới hạn: 8 ảnh/32 MiB mỗi phiên, cache RAM 64 MiB, dữ liệu ảnh 256 MiB trên đĩa. Ảnh ra khỏi cache RAM có thể nạp lại; ảnh bị loại khỏi kho do giới hạn có cảnh báo để chụp lại. `status.log` xoay vòng khi đạt khoảng 2 MiB và giữ một bản `status.previous.log`; log không chứa câu hỏi, đáp án hay API key.
 
 Để sao lưu, đóng app rồi chép `session.json`, `session-images.sqlite3` và `preferences.json`; giữ chúng cùng thư mục EXE khi phục hồi. Kho ảnh là dữ liệu riêng trên máy, không được mã hóa; chỉ ảnh/chữ cần cho câu hỏi mới được gửi đến API đã chọn. Ảnh từng bị mất khi thoát các bản cũ không thể khôi phục tự động.
 
@@ -99,7 +100,7 @@ Repository chỉ chứa code và cấu hình mẫu trống. `.gitignore` loại 
 
 ## Quản lý hội thoại, chẩn đoán và riêng tư
 
-Mở tray → **Hội thoại · Chẩn đoán · Riêng tư…**. Tab Hội thoại tìm trong toàn bộ nội dung, mở phiên, đổi tên, xuất Markdown/JSON và sao lưu ZIP gồm lịch sử + kho ảnh. ZIP không gồm khóa API/đăng nhập; đóng app trước khi khôi phục hai file cạnh EXE. File xuất và ZIP chưa mã hóa.
+Mở tray → **Model / API / cài đặt → Quản lý hội thoại · Chẩn đoán · Riêng tư…**. Tab Hội thoại tìm trong toàn bộ nội dung, mở phiên, đổi tên, xuất Markdown/JSON và sao lưu ZIP gồm lịch sử + kho ảnh. ZIP không gồm khóa API/đăng nhập; đóng app trước khi khôi phục hai file cạnh EXE. File xuất và ZIP chưa mã hóa.
 
 Tab Chẩn đoán hiển thị provider/model thực dùng, trạng thái lỗi an toàn, proxy hệ thống đã bỏ thông tin đăng nhập, số lần gọi và token provider báo từ lúc mở app. Đếm cả lần thất bại, tóm tắt và dự phòng; giữ 200 dòng gần nhất. Lần không có usage được ghi “không báo”, không ước lượng thành token thật. OpenAI Browser hiện chỉ đếm lần gọi, chưa lấy số token. Nút bỏ khóa tạm cho phép thử provider đã chọn ở lần gửi sau; không tự gửi hay thay đổi key. Proxy hiển thị là cấu hình hệ thống; kết nối vẫn áp dụng quy tắc bỏ qua proxy như trước.
 
@@ -107,4 +108,8 @@ Tab Riêng tư mở phiên trống chỉ trong RAM và mặc định tắt tự 
 
 ## Cấu trúc
 
+Chat và các bảng ảnh/hội thoại mặc định 420 × 560 px, mở ở góc dưới bên phải màn hình đang có con trỏ, trong vùng làm việc để tránh thanh tác vụ. Kéo cạnh để đổi kích thước. Vào **Cài đặt → Hội thoại / Riêng tư → Giao diện** để chỉnh chiều ngang/cao, đổi vị trí sang giữa màn hình, hoặc **Lấy kích thước đang kéo → Lưu kích thước và vị trí**. Lựa chọn lưu trong `preferences.json`, dùng khi mở cửa sổ lần sau và sau khi khởi động lại. Chiều ngang 360–1600 px, chiều cao 480–1400 px; cửa sổ được giới hạn theo diện tích màn hình.
+
 `src/`: ứng dụng và test. `scripts/run_tests.py`: chạy test không gọi API thật. `build.ps1`: đóng gói EXE kèm Tkinter cho API Zoo/prompt editor. `.github/workflows/build-windows.yml`: build tự động. `requirements*.txt`: dependency đã cố định phiên bản.
+
+Cửa sổ **Ảnh & nội dung chat của phiên…** có tab ảnh và tab nội dung hội thoại cùng phiên, kèm nút mở chat để hỏi tiếp. Menu copy theo phiên có mũi tên; chọn tên phiên sẽ chuyển phiên và copy đáp án cuối của phiên đó, không gọi AI. F7 copy đáp án gần nhất, Shift+F7 copy phiên đang chọn; F8 vẫn gửi bài mới.

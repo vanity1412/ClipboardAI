@@ -48,7 +48,7 @@ class RequestDisplayTests(unittest.TestCase):
         display = RequestDisplay()
         display.finish('done', 4, 'B', copy='changed')
         self.assertIn('clipboard đã đổi', display.header())
-        self.assertIn('Shift+F8', display.preview())
+        self.assertIn('F7', display.preview())
         display.copy = 'error'
         self.assertIn('copy lỗi', display.header())
 

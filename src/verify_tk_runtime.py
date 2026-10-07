@@ -68,7 +68,11 @@ def run(output):
             open_tools(dict(archive=ram.archive_snapshot(), stats=ActivityStats().snapshot(),
                 private=True, mask=True, profiles=[], model='synthetic', proxies={}), SessionImages(), events, cancelled)
             assert events.get_nowait() == ('tools_closed',)
+            from image_manager import open_manager
+            open_manager(SessionImages(), ram.active_id, events, cancelled, conversation=ram._snapshot())
+            assert events.get_nowait() == ('images_closed',)
             report.update(private_session=True, management_panel=True, backup=True, redaction=True)
+            report['image_chat_panel'] = True
     except Exception as exc:
         # Keep errors diagnostic; no user data is loaded by this smoke check.
         report.update(ok=False, error_type=type(exc).__name__, error=str(exc))

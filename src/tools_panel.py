@@ -6,17 +6,17 @@ def open_tools(snapshot, images, results, cancel):
     import tkinter as tk
     from tkinter import ttk, filedialog, simpledialog, messagebox
     root, timer, query, status, trace = None, None, None, None, None
+    width = height = position = None
     try:
         root = tk.Tk()
         root.title('Hội thoại · Chẩn đoán · Riêng tư')
-        root.geometry('920x650')
         tabs = ttk.Notebook(root)
         tabs.pack(fill='both', expand=True, padx=10, pady=10)
-        conversations, diagnostics, privacy = [ttk.Frame(tabs, padding=12) for _ in range(3)]
-        for pane, title in zip((conversations, diagnostics, privacy), ('Hội thoại', 'Chẩn đoán / sử dụng', 'Riêng tư')):
+        conversations, diagnostics, privacy, appearance = [ttk.Frame(tabs, padding=10) for _ in range(4)]
+        for pane, title in zip((conversations, diagnostics, privacy, appearance), ('Hội thoại', 'Chẩn đoán', 'Riêng tư', 'Giao diện')):
             tabs.add(pane, text=title)
         status = tk.StringVar(master=root)
-        ttk.Label(root, textvariable=status, wraplength=880).pack(fill='x', padx=12)
+        ttk.Label(root, textvariable=status, wraplength=360).pack(fill='x', padx=12)
         query = tk.StringVar(master=root)
         ttk.Label(conversations, text='Tìm theo tên và toàn bộ nội dung:').pack(anchor='w')
         ttk.Entry(conversations, textvariable=query).pack(fill='x', pady=6)
@@ -72,10 +72,12 @@ def open_tools(snapshot, images, results, cancel):
                     status.set('Sao lưu thất bại; kiểm tra ổ đĩa và kho ảnh')
         bar = ttk.Frame(conversations)
         bar.pack(fill='x', pady=8)
-        for label, command in (('Mở phiên', choose), ('Đổi tên', rename), ('Xuất MD / JSON', export)):
-            ttk.Button(bar, text=label, command=command).pack(side='left', padx=3)
-        ttk.Button(bar, text='Sao lưu hội thoại + ảnh ZIP', command=backup,
-                   state='disabled' if snapshot['private'] else 'normal').pack(side='left', padx=3)
+        for column in (0, 1):
+            bar.columnconfigure(column, weight=1)
+        for index, (label, command) in enumerate((('Mở phiên', choose), ('Đổi tên', rename), ('Xuất MD / JSON', export))):
+            ttk.Button(bar, text=label, command=command).grid(row=index//2, column=index%2, sticky='ew', padx=3, pady=3)
+        ttk.Button(bar, text='Sao lưu ZIP', command=backup,
+                   state='disabled' if snapshot['private'] else 'normal').grid(row=1, column=1, sticky='ew', padx=3, pady=3)
         text = tk.Text(diagnostics, wrap='word', height=22)
         text.pack(fill='both', expand=True)
         stats = snapshot['stats']
@@ -100,8 +102,9 @@ def open_tools(snapshot, images, results, cancel):
         def retry():
             if provider.current() >= 0:
                 action('retry_provider', profiles[provider.current()]['id'])
-        ttk.Button(diagnostics, text='Bỏ khóa tạm provider đã chọn (lần gửi sau sẽ thử lại)', command=retry).pack(anchor='w')
-        ttk.Label(privacy, wraplength=820, text=
+        ttk.Button(diagnostics, text='Thử lại provider đã chọn', command=retry).pack(anchor='w')
+        ttk.Label(diagnostics, text='Bỏ khóa tạm; lần gửi sau sẽ thử lại.', wraplength=340).pack(anchor='w')
+        ttk.Label(privacy, wraplength=340, text=
                   'Phiên riêng tư chỉ giữ câu hỏi và ảnh trong RAM, không ghi lịch sử/ảnh xuống ổ đĩa. '
                   'Bật sẽ mở phiên trống. Tắt sẽ bỏ phiên riêng tư và trở về lịch sử đã lưu. '
                   'Chế độ này không xóa dữ liệu đã lưu trước đó và không ngăn nhà cung cấp AI nhận nội dung bạn gửi. '
@@ -113,6 +116,34 @@ def open_tools(snapshot, images, results, cancel):
                    command=lambda: action('mask', not snapshot['mask'])).pack(anchor='w', pady=8)
         ttk.Button(privacy, text='Dọn nội dung phiên riêng tư trong RAM', state='normal' if snapshot['private'] else 'disabled',
                    command=lambda: action('clear_private')).pack(anchor='w', pady=8)
+        settings = snapshot.get('window_settings', {})
+        width = tk.StringVar(master=root, value=str(settings.get('PANEL_WIDTH', '420')))
+        height = tk.StringVar(master=root, value=str(settings.get('PANEL_HEIGHT', '560')))
+        position = tk.StringVar(master=root, value='Giữa màn hình' if settings.get('PANEL_POSITION') == 'center' else 'Góc dưới bên phải')
+        ttk.Label(appearance, text='Kích thước mặc định của cửa sổ', wraplength=340).pack(anchor='w', pady=8)
+        for label, variable, low, high in (('Chiều ngang (px)', width, 360, 1600), ('Chiều cao (px)', height, 480, 1400)):
+            ttk.Label(appearance, text=label).pack(anchor='w', pady=4)
+            ttk.Spinbox(appearance, from_=low, to=high, textvariable=variable, width=12).pack(anchor='w')
+        ttk.Label(appearance, text='Vị trí khi mở').pack(anchor='w', pady=8)
+        ttk.Combobox(appearance, state='readonly', textvariable=position,
+                     values=('Góc dưới bên phải', 'Giữa màn hình')).pack(fill='x')
+        def save_window():
+            from runtime_settings import validated_preferences
+            values = dict(PANEL_WIDTH=width.get(), PANEL_HEIGHT=height.get(),
+                          PANEL_POSITION='center' if position.get() == 'Giữa màn hình' else 'bottom_right')
+            valid, invalid = validated_preferences(values)
+            if invalid:
+                status.set('Ngang 360–1600 px; cao 480–1400 px.')
+                return
+            action('window_settings', valid)
+        def use_current():
+            width.set(str(root.winfo_width()))
+            height.set(str(root.winfo_height()))
+        ttk.Button(appearance, text='Lấy kích thước đang kéo', command=use_current).pack(anchor='w', pady=8)
+        ttk.Button(appearance, text='Lưu kích thước và vị trí', command=save_window).pack(anchor='w', pady=8)
+        ttk.Label(appearance, text='Mặc định 420 × 560 px, góc dưới bên phải, tránh thanh tác vụ. Có thể kéo cạnh cửa sổ để đổi kích thước.', wraplength=340).pack(anchor='w', pady=8)
+        from window_layout import place_tk
+        place_tk(root, settings)
         root.protocol('WM_DELETE_WINDOW', root.quit)
         def poll():
             nonlocal timer
@@ -134,7 +165,7 @@ def open_tools(snapshot, images, results, cancel):
                 pass
             # Variables can outlive this function through callback closures.
             # The interpreter has been destroyed on its owner thread already.
-            for variable in (query, status):
+            for variable in (query, status, width, height, position):
                 if variable is not None:
                     variable._tk = None
         results.put(('tools_closed',))

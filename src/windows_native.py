@@ -589,7 +589,9 @@ class WindowsApp:
         if not self.user.RegisterClassW(C.byref(wc)):
             raise C.WinError(C.get_last_error())
         self.instance = instance
-        self.hwnd = self.user.CreateWindowExW(0, wc.lpszClassName, "ClipboardAI", 0x00CF0000, 80, 60, 620, 560, None, None, instance, None)
+        from window_layout import panel_bounds, work_area
+        x, y, width, height = panel_bounds(self.config, work_area())
+        self.hwnd = self.user.CreateWindowExW(0, wc.lpszClassName, "ClipboardAI", 0x00CF0000, x, y, width, height, None, None, instance, None)
         if not self.hwnd or not self.user.AddClipboardFormatListener(self.hwnd):
             raise C.WinError(C.get_last_error())
         # Treat existing clipboard content as a baseline, not a new user copy.
@@ -601,7 +603,7 @@ class WindowsApp:
         self.nid.cbSize, self.nid.hWnd, self.nid.uID = C.sizeof(NID), self.hwnd, 1
         self.nid.uFlags, self.nid.uCallbackMessage = 7, 0x8001
         self.nid.hIcon = self.user.LoadIconW(None, C.c_void_p(32516))
-        self.nid.szTip = "ClipboardAI: F4 ảnh | F8 mới | F9 hỏi tiếp | Shift+F8 copy | F10 hủy"
+        self.nid.szTip = "ClipboardAI: F4 ảnh | F8 mới | F9 hỏi tiếp | F7 copy | F10 hủy"
         if not self.shell.Shell_NotifyIconW(0, C.byref(self.nid)):
             raise RuntimeError("Cannot create system tray icon")
         self.nid.uTimeoutOrVersion = 4
@@ -613,7 +615,7 @@ class WindowsApp:
         self.create_notice()
         self.register_hotkeys()
         if not self.self_test:
-            self.tooltip(self.state + "; F4 ảnh, F8 mới, F9 hỏi tiếp, Shift+F8 copy, F10 hủy")
+            self.tooltip(self.state + "; F4 ảnh, F8 mới, F9 hỏi tiếp, F7 copy, F10 hủy")
         log_event("ready", backend="Windows native", clipboard_listener=True, auto_send=False)
 
     def control(self, name, kind, text, x, y, width, height, ident=0, style=0):
@@ -852,6 +854,7 @@ class WindowsApp:
         if self.is_deepseek:
             self.user.EnableWindow(self.controls["model"], False)
         self.control("apply", "BUTTON", "Lưu cấu hình", 600, 668, 135, 30, 116)
+        self.control('manage', 'BUTTON', 'Hội thoại / Riêng tư', 745, 668, 210, 30, 224)
         self.control("hotkeys", "BUTTON", "Cài đặt phím tắt", 205, 310, 180, 30, 665)
         self.control("note", "STATIC", "F3×2: Wi-Fi/LAN. F4: chụp đề. F6: chọn phiên. F8: bài mới. F9: phản hồi. F10: hủy AI.", 15, 710, 940, 35)
         self.control("menu", "BUTTON", "Menu", 540, 10, 80, 28, 216)
@@ -876,7 +879,7 @@ class WindowsApp:
             return
         rect = W.RECT()
         self.user.GetClientRect(self.hwnd, C.byref(rect))
-        width, height = max(440, rect.right), max(410, rect.bottom)
+        width, height = max(320, rect.right), max(410, rect.bottom)
         settings = getattr(self, 'settings_visible', False)
         layout = {
             'status': (12, 10, width - 108, 40), 'menu': (width - 88, 10, 76, 28),
@@ -884,21 +887,25 @@ class WindowsApp:
             'mode': (75, 81, width - 273, 220), 'auto': (width - 188, 84, 176, 25),
         }
         if settings:
+            column = (width - 56)//3
+            half = (width - 36)//2
             layout.update(config_label=(12, 130, width - 24, 38), model=(12, 175, width - 24, 28),
-                          ctx=(12, 218, 110, 28), predict=(138, 218, 110, 28), timeout=(264, 218, 110, 28),
+                          ctx=(12, 218, column, 28), predict=(28+column, 218, column, 28), timeout=(44+column*2, 218, column, 28),
                           apply=(12, 264, 135, 30), probe=(160, 264, 150, 30), pause=(12, 310, 180, 30),
-                          hotkeys=(205, 310, 180, 30), clear=(12, 350, 135, 30),
+                          hotkeys=(24+half, 310, half, 30), manage=(160, 350, width - 172, 30), clear=(12, 350, 135, 30),
                           note=(12, 390, width - 24, 65))
+            layout['pause'] = (12, 310, half, 30)
             self.set_text('config_label', 'Model / Ký tự lịch sử / Token / Timeout (0=tắt)')
             if selected_profile(self.config):
                 layout.pop('predict')
                 layout.pop('timeout')
                 self.set_text('config_label', 'Model / Giới hạn lịch sử (ký tự)')
         else:
+            button = (width-48)//4
             layout.update(answer_label=(12, 120, width - 24, 20), answer=(12, 144, width - 24, height - 335),
                           problem_label=(12, height - 178, width - 24, 20), problem=(12, height - 151, width - 24, 82),
-                          send=(12, height - 59, 76, 30), cancel=(98, height - 59, 100, 30),
-                          copy=(208, height - 59, 114, 30), new=(332, height - 59, 94, 30),
+                          send=(12, height - 59, button, 30), cancel=(20+button, height - 59, button, 30),
+                          copy=(28+button*2, height - 59, button, 30), new=(36+button*3, height - 59, button, 30),
                           note=(12, height - 24, width - 24, 20))
         for name, handle in self.controls.items():
             self.user.ShowWindow(handle, 5 if name in layout else 0)
@@ -1044,6 +1051,8 @@ class WindowsApp:
 
     def show_panel(self):
         self.user.ShowWindow(self.hwnd, 9)
+        from window_layout import place_native
+        place_native(self.user, self.hwnd, self.config)
         self.user.SetForegroundWindow(self.hwnd)
         self.refresh_panel()
         self.user.SetFocus(self.controls['problem'])
@@ -1830,7 +1839,7 @@ class WindowsApp:
         if getattr(self, 'tools_open', False) and ident not in (2, 224, 109, 216):
             self.display_state().show_feedback('Đóng cửa sổ quản lý trước khi đổi phiên/cấu hình')
             return
-        if getattr(self, 'exiting', False) and ident not in (111, 215):
+        if getattr(self, 'exiting', False) and ident not in (111, 215, 217):
             return
         if getattr(self, 'region_pending', False):
             if ident in (109, 203):
@@ -1923,9 +1932,12 @@ class WindowsApp:
             self.images_manager_open = True
             self.images_manager_cancel = threading.Event()
             session_id = self.session.active_id
+            conversation = next(r for r in self.session.archive_snapshot()['sessions'] if r['id'] == session_id)
+            window_settings = {name: self.config[name] for name in ('PANEL_WIDTH', 'PANEL_HEIGHT', 'PANEL_POSITION') if name in self.config}
             def manager():
                 try:
-                    open_manager(self.images, session_id, self.results, self.images_manager_cancel)
+                    open_manager(self.images, session_id, self.results, self.images_manager_cancel,
+                                 conversation=conversation, settings=window_settings)
                 except Exception:
                     self.results.put(('images_closed',))
                     self.results.put(('probe', 'Không mở được cửa sổ quản lý ảnh'))
@@ -1949,7 +1961,8 @@ class WindowsApp:
             snapshot = dict(archive=self.session.archive_snapshot(), stats=self.activity.snapshot(),
                             model=self.config.get('SELECTED_MODEL', self.config.get('DEEPSEEK_MODEL', '')),
                             proxies=safe_proxies(), profiles=profiles, private=self.private_mode, mask=self.mask_images,
-                            last_provider=getattr(self, 'last_api_used', ''), last_status=self.state)
+                            last_provider=getattr(self, 'last_api_used', ''), last_status=self.state,
+                            window_settings={name: self.config[name] for name in ('PANEL_WIDTH', 'PANEL_HEIGHT', 'PANEL_POSITION') if name in self.config})
             self.tools_open = True
             self.tools_cancel = threading.Event()
             def tools():
@@ -2139,8 +2152,8 @@ class WindowsApp:
                 self.start_request(text, action="code" if ident == 108 else "chat" if is_chat(self.session.mode) else "repair", new_session=False)
         elif ident == 109:
             self.cancel_request()
-        elif ident in (111, 215):
-            self.copy_last_answer(current_session=ident == 111)
+        elif ident in (111, 215, 217):
+            self.copy_last_answer(current_session=ident in (111, 217))
         elif ident == 112:
             if getattr(self, "network_busy", False):
                 self.state = "Đang chuyển/đọc mạng; chờ xong rồi kiểm tra API"
@@ -2297,6 +2310,15 @@ class WindowsApp:
         finally:
             self.kernel.GlobalUnlock(handle)
 
+    def copy_session_answer(self, ident):
+        if self.busy:
+            self.display_state().show_feedback('Chờ AI hoàn tất hoặc hủy trước khi chọn phiên để copy')
+            return
+        if ident != self.session.active_id:
+            self.select_session(ident)
+        if ident == self.session.active_id:
+            self.copy_last_answer(current_session=True)
+
     def copy_last_answer(self, current_session=False):
         """Explicitly copy a completed answer; never submit another AI request."""
         answer = getattr(self.session, 'last_answer', '') if current_session else (
@@ -2307,7 +2329,7 @@ class WindowsApp:
         else:
             value = self.read_clipboard()
             if value is None:
-                self.state = 'Clipboard đang bận; nhấn Shift+F8 lại để copy đáp án'
+                self.state = 'Clipboard đang bận; nhấn F7 lại để copy đáp án'
                 self.display_state().show_feedback(self.state)
             else:
                 self.region_clipboard_hold = False
@@ -2329,9 +2351,9 @@ class WindowsApp:
         try:
             if self.user.GetClipboardSequenceNumber() != original_sequence:
                 # Any new clipboard event may contain images/files, even when its
-                # text is empty or unchanged. Recover explicitly with Shift+F8.
+                # text is empty or unchanged. Recover explicitly with F7.
                 log_event("stale_answer_discarded")
-                self.state = "Đã có kết quả; clipboard đã đổi nên không ghi đè. Shift+F8 để copy lại."
+                self.state = "Đã có kết quả; clipboard đã đổi nên không ghi đè. F7 để copy lại."
                 self.display_state().copy = 'changed'
                 self.tooltip(self.state)
                 return True
@@ -2491,9 +2513,18 @@ class WindowsApp:
             self.user.AppendMenuW(menu, 0, 3, 'Mở chat')
             self.user.AppendMenuW(menu, 0, 207, 'Hội thoại / thao tác phiên — ' + self.key_label(207))
             self.user.AppendMenuW(menu, 0, 202, 'Hỏi tiếp từ clipboard — ' + self.key_label(202))
-            self.user.AppendMenuW(menu, 0 if self.session.last_answer else 1, 111, "Copy đáp án của phiên đang chọn")
-            self.user.AppendMenuW(menu, 1 if self.busy else 0, 223, 'Quản lý / xem ảnh của phiên…')
-            self.user.AppendMenuW(menu, 1 if self.busy else 0, 224, 'Hội thoại · Chẩn đoán · Riêng tư…')
+            copies = self.user.CreatePopupMenu()
+            self.user.AppendMenuW(copies, 0 if self.session.last_answer else 1, 111, 'Copy phiên đang chọn — ' + self.key_label(217))
+            self.user.AppendMenuW(copies, 0x800, 0, '')
+            self.copy_session_commands = {}
+            records = {r['id']: r for r in self.session.archive_snapshot()['sessions']}
+            for index, entry in enumerate(self.session.entries()):
+                command = 60000 + index
+                self.copy_session_commands[command] = entry['id']
+                flags = (8 if entry['id'] == self.session.active_id else 0) | (1 if self.busy or not records[entry['id']]['last_answer'] else 0)
+                self.user.AppendMenuW(copies, flags, command, entry['title'].replace('&', '&&'))
+            self.user.AppendMenuW(menu, 0x10, copies, 'Copy đáp án theo phiên — ' + self.key_label(217))
+            self.user.AppendMenuW(menu, 1 if self.busy else 0, 223, 'Ảnh & nội dung chat của phiên…')
             can_copy = bool(getattr(self, 'last_completed_answer', '') or self.session.last_answer)
             self.user.AppendMenuW(menu, 0 if can_copy else 1, 215, 'Copy đáp án gần nhất — ' + self.key_label(215))
             self.user.AppendMenuW(menu, 1 if self.busy else 0, 107, 'Gửi lại — ' + self.key_label(213))
@@ -2579,6 +2610,7 @@ class WindowsApp:
                 self.user.AppendMenuW(menu, 0, 109, 'Hủy yêu cầu — ' + self.key_label(203))
             self.user.AppendMenuW(ai, 0, 103, "Tạm dừng / trả phím cho ứng dụng khác" if self.enabled else "Bật lại phím tắt")
             self.user.AppendMenuW(ai, 0, 221, "Cài đặt / kiểm tra kết nối")
+            self.user.AppendMenuW(ai, 1 if self.busy else 0, 224, 'Quản lý hội thoại · Chẩn đoán · Riêng tư…')
             self.user.AppendMenuW(ai, 0, 665, 'Cài đặt phím tắt…')
             self.user.AppendMenuW(menu, 0x10, ai, "Model / API / cài đặt")
             self.user.AppendMenuW(menu, 0, 2, "Thoát")
@@ -2609,6 +2641,8 @@ class WindowsApp:
             elif choice == 102:
                 self.user.SendMessageW(self.controls["auto"], 0xF1, int(not self.session.auto_copy), 0)
                 self.command(102)
+            elif choice in self.copy_session_commands:
+                self.copy_session_answer(self.copy_session_commands[choice])
             elif choice:
                 self.command(choice)
         finally:
@@ -2679,6 +2713,12 @@ class WindowsApp:
                     elif action == 'mask':
                         self.mask_images = bool(value)
                         self.state = 'Đã ' + ('bật' if value else 'tắt') + ' che ảnh trước khi gửi'
+                    elif action == 'window_settings':
+                        valid, invalid = validated_preferences(value)
+                        if invalid or set(valid) != {'PANEL_WIDTH', 'PANEL_HEIGHT', 'PANEL_POSITION'}:
+                            raise ValueError('Kích thước hoặc vị trí cửa sổ không hợp lệ')
+                        self.save_input_preferences(valid)
+                        self.state = 'Đã lưu kích thước và vị trí; áp dụng khi mở bảng lại'
                     elif action in ('privacy', 'clear_private'):
                         self.change_privacy(bool(value) if action == 'privacy' else True, clear=action == 'clear_private')
                     self.tooltip(self.state)
@@ -2690,6 +2730,12 @@ class WindowsApp:
             if kind == 'images_closed':
                 self.images_manager_open = False
                 self.display_state().feedback = ''
+                continue
+            if kind == 'images_open_chat':
+                if not self.busy and result[1] == self.session.active_id:
+                    self.settings_visible = False
+                    self.layout_panel()
+                    self.show_panel()
                 continue
             if kind == 'images_changed':
                 if result[1] == self.session.active_id:
@@ -3046,6 +3092,8 @@ class WindowsApp:
                     self.send_screenshot(append=True)
                 elif wp == 215:
                     self.copy_last_answer()
+                elif wp == 217:
+                    self.copy_last_answer(current_session=True)
                 return 0
             if msg == 5:
                 self.layout_panel()
@@ -3054,7 +3102,7 @@ class WindowsApp:
                 class MinMax(C.Structure):
                     _fields_ = [('reserved', W.POINT), ('max_size', W.POINT), ('max_pos', W.POINT), ('min_track', W.POINT), ('max_track', W.POINT)]
                 bounds = C.cast(lp, C.POINTER(MinMax)).contents
-                bounds.min_track.x, bounds.min_track.y = 460, 450
+                bounds.min_track.x, bounds.min_track.y = 360, 480
                 return 0
             if msg == 0x0111:
                 if not getattr(self, "panel_ready", False):

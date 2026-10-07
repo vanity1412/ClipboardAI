@@ -2,10 +2,10 @@
 import re
 
 DEFAULTS = {201: 'F8', 202: 'F9', 203: 'F10', 204: 'F4', 207: 'F6',
-            209: 'F3', 213: 'Shift+F10', 214: 'Shift+F9', 215: 'Shift+F8'}
+            209: 'F3', 213: 'Shift+F10', 214: 'Shift+F9', 215: 'F7', 217: 'Shift+F7'}
 LABELS = {201: 'Gửi chữ: câu hỏi mới', 202: 'Gửi chữ bổ sung', 203: 'Hủy yêu cầu / chọn vùng',
           204: 'Chụp câu hỏi mới', 207: 'Quản lý phiên', 209: 'Chọn mạng (nhấn hai lần)',
-          213: 'Gửi lại yêu cầu', 214: 'Chụp ảnh bổ sung', 215: 'Copy lại đáp án'}
+          213: 'Gửi lại yêu cầu', 214: 'Chụp ảnh bổ sung', 215: 'Copy đáp án gần nhất', 217: 'Copy đáp án phiên đang chọn'}
 MODIFIERS = {'ctrl': ('Ctrl', 2), 'alt': ('Alt', 1), 'shift': ('Shift', 4), 'win': ('Win', 8)}
 
 def parse_shortcut(text):
@@ -36,7 +36,10 @@ def normalized_shortcuts(overrides=None):
     # Ignore the removed chat shortcut in preferences saved by older versions.
     if not isinstance(overrides, dict) or not set(overrides) <= {str(i) for i in DEFAULTS} | {'212'}:
         raise ValueError('Danh sách chức năng phím tắt không hợp lệ')
-    return {str(i): parse_shortcut(overrides.get(str(i), default))[0] for i, default in DEFAULTS.items()}
+    selected = {str(i): parse_shortcut(overrides.get(str(i), default))[0] for i, default in DEFAULTS.items()}
+    if selected['215'] == 'Shift+F8':
+        selected['215'] = 'F7'  # Upgrade the previous default; custom bindings stay.
+    return selected
 
 
 def disabled_actions(disabled=None):

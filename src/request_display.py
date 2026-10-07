@@ -100,7 +100,7 @@ class RequestDisplay:
         if self.phase != 'done':
             return [HoverPage(self.preview().splitlines())]
         unknown, _ = self.answer_details()
-        hint = self.hint('Shift+F8 để copy') if self.copy in ('changed', 'error', 'manual') else ''
+        hint = self.hint('F7 để copy') if self.copy in ('changed', 'error', 'manual') else ''
         return answer_pages(self.header(), self._all_answer_rows, unknown,
                             self._uncertain_reason, hint, measure, width, notice=self.notice)
 
@@ -161,7 +161,7 @@ class RequestDisplay:
                 if self._uncertain_reason:
                     warning += ' · ' + self._uncertain_reason
             room = 4 - bool(warning) - bool(self.notice)
-            hint = ('Shift+F8 để copy' if self.copy in ('changed', 'error', 'manual') else
+            hint = ('F7 để copy' if self.copy in ('changed', 'error', 'manual') else
                     'F9 chữ / Shift+F9 ảnh' if unknown and not answer_rows else '')
             if hint:
                 room -= 1

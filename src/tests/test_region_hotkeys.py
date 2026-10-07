@@ -50,7 +50,7 @@ class RegionHotkeyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 app.apply_hotkeys({'201': 'Ctrl+Alt+Q'})
             self.assertEqual(app.config['HOTKEYS'], {})
-            self.assertEqual(len(app.hotkeys), 9)
+            self.assertEqual(len(app.hotkeys), len(DEFAULTS))
             app.save_input_preferences.assert_not_called()
             app.user.RegisterHotKey.side_effect = None
             app.user.RegisterHotKey.return_value = True
@@ -58,7 +58,7 @@ class RegionHotkeyTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 app.apply_hotkeys({'201': 'Ctrl+Alt+Q'})
             self.assertEqual(app.config['HOTKEYS'], {})
-            self.assertEqual(len(app.hotkeys), 9)
+            self.assertEqual(len(app.hotkeys), len(DEFAULTS))
 
     def test_region_cancel_keeps_session_clipboard_and_pending_answer(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -141,12 +141,12 @@ class RegionHotkeyTests(unittest.TestCase):
             app.save_input_preferences = Mock()
             app.apply_hotkeys({'201': 'Ctrl+Alt+Q'})
             self.assertEqual(app.hotkeys, [])
-            self.assertEqual(app.user.UnregisterHotKey.call_count, 9)
+            self.assertEqual(app.user.UnregisterHotKey.call_count, len(DEFAULTS))
             self.assertEqual(app.config['HOTKEYS']['201'], 'Ctrl+Alt+Q')
 
     def test_changed_shortcuts_appear_in_hints_without_rewriting_answer(self):
         from request_display import RequestDisplay
-        display = RequestDisplay(shortcut_names={'Shift+F8': 'Ctrl+Alt+C', 'F10': 'Ctrl+Alt+X'})
+        display = RequestDisplay(shortcut_names={'F7': 'Ctrl+Alt+C', 'F10': 'Ctrl+Alt+X'})
         display.finish('done', 2, 'F10 is a key in this code example', copy='changed')
         self.assertIn('Ctrl+Alt+C để copy', display.preview())
         self.assertEqual(display.answer, 'F10 is a key in this code example')
@@ -210,7 +210,7 @@ class RegionHotkeyTests(unittest.TestCase):
             app.config.update(HOTKEYS={'201': 'Ctrl+Alt+Q', '212': 'F7'}, HOTKEYS_DISABLED=['201', '209'])
             app.user.RegisterHotKey.return_value = True
             app.register_hotkeys()
-            self.assertEqual(len(app.hotkeys), 7)
+            self.assertEqual(len(app.hotkeys), len(DEFAULTS) - 2)
             self.assertNotIn(201, app.hotkeys)
             self.assertNotIn(209, app.hotkeys)
             self.assertNotIn(212, app.hotkeys)
@@ -308,7 +308,7 @@ class RegionHotkeyTests(unittest.TestCase):
             self.assertEqual(app.config['HOTKEYS'], {'201': 'Ctrl+Alt+S'})
             self.assertEqual(app.config['HOTKEYS_DISABLED'], ['209'])
             app.save_input_preferences.assert_not_called()
-            self.assertEqual(app.user.UnregisterHotKey.call_count, 7)
+            self.assertEqual(app.user.UnregisterHotKey.call_count, 8)
             app.window_proc(app.hwnd, 0x0312, 201, 0)
             app.send_clipboard.assert_not_called()
 
@@ -323,8 +323,8 @@ class RegionHotkeyTests(unittest.TestCase):
             app.apply_hotkeys({'201': 'Ctrl+Alt+Q'})
             self.assertFalse(app.enabled)
             self.assertEqual(app.hotkeys, [])
-            self.assertEqual(app.user.RegisterHotKey.call_count, 9)
-            self.assertEqual(app.user.UnregisterHotKey.call_count, 9)
+            self.assertEqual(app.user.RegisterHotKey.call_count, len(DEFAULTS))
+            self.assertEqual(app.user.UnregisterHotKey.call_count, len(DEFAULTS))
             self.assertEqual(app.config['HOTKEYS']['201'], 'Ctrl+Alt+Q')
             app.save_input_preferences.assert_called_once()
             app.user.RegisterHotKey.reset_mock()
@@ -348,4 +348,4 @@ class RegionHotkeyTests(unittest.TestCase):
             self.assertEqual(app.hotkeys, [])
             self.assertEqual(app.config['HOTKEYS'], {'201': 'Ctrl+Alt+S'})
             self.assertEqual(app.config['HOTKEYS_DISABLED'], ['209'])
-            self.assertEqual(app.user.UnregisterHotKey.call_count, 9)
+            self.assertEqual(app.user.UnregisterHotKey.call_count, len(DEFAULTS))

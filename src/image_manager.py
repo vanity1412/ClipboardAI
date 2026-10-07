@@ -3,26 +3,45 @@ import hashlib
 from io import BytesIO
 
 
-def open_manager(cache, session_id, results, cancel):
+def open_manager(cache, session_id, results, cancel, conversation=None, settings=None):
     import tkinter as tk
     from tkinter import ttk, messagebox
     root = None
     timer = None
     try:
         root = tk.Tk()
-        root.title('Quản lý ảnh của phiên')
-        root.geometry('800x570')
-        root.minsize(680, 460)
-        pane = ttk.Frame(root, padding=12)
-        pane.pack(fill='both', expand=True)
+        root.title('Ảnh & nội dung chat của phiên')
+        tabs = ttk.Notebook(root)
+        tabs.pack(fill='both', expand=True)
+        pane = ttk.Frame(tabs, padding=12)
+        tabs.add(pane, text='Ảnh đính kèm')
+        chat = ttk.Frame(tabs, padding=12)
+        tabs.add(chat, text='Nội dung chat của phiên')
+        conversation = conversation or {}
+        ttk.Label(chat, text=conversation.get('title') or 'Hội thoại cùng phiên với các ảnh này', wraplength=340).pack(anchor='w', pady=6)
+        from tkinter.scrolledtext import ScrolledText
+        history = ScrolledText(chat, wrap='word', font=('Segoe UI', 10))
+        history.pack(fill='both', expand=True)
+        transcript = '\n\n'.join(('Bạn' if m['role'] == 'user' else 'AI') + ':\n' + m['content']
+                                 for m in conversation.get('messages', []))
+        if not transcript:
+            transcript = conversation.get('problem', '') + '\n\n' + conversation.get('last_answer', '')
+        if len(transcript) > 180000:
+            transcript = '[Hiển thị phần cuối hội thoại; xuất hội thoại trong Cài đặt để xem toàn bộ.]\n\n' + transcript[-180000:]
+        history.insert('1.0', transcript.strip() or 'Phiên này chưa có nội dung chat.')
+        history.configure(state='disabled')
+        def open_chat():
+            results.put(('images_open_chat', session_id))
+            close()
+        ttk.Button(chat, text='Mở chat để hỏi tiếp', command=open_chat).pack(anchor='e', pady=8)
         status = tk.StringVar(master=root)
-        ttk.Label(pane, textvariable=status, wraplength=760).pack(fill='x')
+        ttk.Label(pane, textvariable=status, wraplength=340).pack(fill='x')
         body = ttk.Frame(pane)
         body.pack(fill='both', expand=True, pady=10)
-        listing = tk.Listbox(body, width=24, exportselection=False)
-        listing.pack(side='left', fill='y')
+        listing = tk.Listbox(body, height=4, exportselection=False)
+        listing.pack(side='top', fill='x')
         preview = ttk.Label(body, anchor='center', text='Chọn một ảnh để xem')
-        preview.pack(side='right', fill='both', expand=True, padx=10)
+        preview.pack(side='top', fill='both', expand=True, pady=8)
         photos = []
         frames = []
 
@@ -37,6 +56,7 @@ def open_manager(cache, session_id, results, cancel):
 
         def close():
             cancel_timer()
+            root.quit()
             root.destroy()
 
         root.protocol('WM_DELETE_WINDOW', close)
@@ -51,7 +71,9 @@ def open_manager(cache, session_id, results, cancel):
             try:
                 from PIL import Image, ImageTk
                 with Image.open(BytesIO(frames[selected[0]])) as image:
-                    image.thumbnail((520, 410))
+                    width = max(72, preview.winfo_width() if preview.winfo_width() > 1 else root.winfo_width()-40)
+                    height = max(72, preview.winfo_height() if preview.winfo_height() > 1 else 300)
+                    image.thumbnail((width, height))
                     photo = ImageTk.PhotoImage(image, master=root)
                 photos.append(photo)
                 preview.configure(image=photo, text='')
@@ -88,6 +110,7 @@ def open_manager(cache, session_id, results, cancel):
                 status.set(str(exc))
 
         listing.bind('<<ListboxSelect>>', show)
+        preview.bind('<Configure>', show)
         buttons = ttk.Frame(pane)
         buttons.pack(fill='x')
         ttk.Button(buttons, text='Xóa ảnh đang chọn', command=remove).pack(side='left')
@@ -100,7 +123,9 @@ def open_manager(cache, session_id, results, cancel):
                 return
             timer = root.after(100, poll)
         refresh()
-        poll()
+        from window_layout import place_tk
+        place_tk(root, settings)
+        timer = root.after(0, poll)
         root.mainloop()
     finally:
         if root is not None:

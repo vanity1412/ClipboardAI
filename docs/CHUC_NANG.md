@@ -12,7 +12,8 @@ Hai tên EXE dùng cùng mã nguồn trong `src`. Bảng dưới là bộ phím 
 | Shift+F9 | Chọn vùng ảnh bổ sung vào phiên hiện tại |
 | F10 | Hủy yêu cầu AI hoặc chọn vùng; không copy đáp án dở |
 | Shift+F10 | Gửi lại yêu cầu đã lưu, không đọc câu hỏi mới từ clipboard |
-| Shift+F8 | Copy đáp án hoàn tất gần nhất, không gọi AI lại |
+| F7 | Copy đáp án hoàn tất gần nhất, không gọi AI lại |
+| Shift+F7 | Copy đáp án của phiên đang chọn |
 | F6 | Mở danh sách hội thoại và thao tác quản lý phiên |
 | F3 hai lần nhanh | Mở menu chọn card mạng/Wi-Fi |
 | Esc hoặc chuột phải khi chọn vùng | Hủy chọn vùng, giữ clipboard và phiên |
@@ -29,8 +30,8 @@ ClipboardAI
 ├─ Mở chat
 ├─ Hội thoại / thao tác phiên — F6
 ├─ Hỏi tiếp từ clipboard — F9
-├─ Copy đáp án của phiên đang chọn
-├─ Copy đáp án gần nhất — Shift+F8
+├─ Copy đáp án theo phiên — Shift+F7 → chọn phiên để copy ngay
+├─ Copy đáp án gần nhất — F7
 ├─ Gửi lại — Shift+F10
 ├─ Mạng · Wi-Fi / LAN
 │  ├─ Chọn mạng · Wi-Fi / LAN — F3×2
@@ -70,7 +71,7 @@ Danh sách API, model, card mạng và Wi-Fi phụ thuộc cấu hình và máy.
 
 ## Hội thoại và mạng
 
-F6 có **Hội thoại mới từ clipboard** và **Tạo phiên trống**. Mỗi phiên có **Chọn phiên**, **Mở chat**, **Gửi lại yêu cầu**, **Copy câu trả lời**, **Xóa ảnh đã thu thập**, **Lưu lại lịch sử**, **Xóa phiên**, **Quản lý / xem ảnh…**. Danh sách hiển thị tên và thời điểm cập nhật phiên. Menu tray cũng có quản lý ảnh của phiên hiện tại.
+F6 có **Hội thoại mới từ clipboard** và **Tạo phiên trống**. Mỗi phiên có **Chọn phiên**, **Mở chat**, **Gửi lại yêu cầu**, **Copy câu trả lời**, **Xóa ảnh đã thu thập**, **Lưu lại lịch sử**, **Xóa phiên**, **Ảnh & nội dung chat…**. Danh sách hiển thị tên và thời điểm cập nhật phiên. Menu tray cũng có quản lý ảnh của phiên hiện tại.
 
 Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã lưu/chưa lưu và trạng thái kết nối. Có **Làm mới danh sách** và **Thiết lập trong Windows**. Mạng chưa lưu chuyển sang Windows để nhập mật khẩu. EXE chạy bằng quyền người dùng thông thường; Windows chỉ hỏi UAC khi cần bật/tắt card mạng. Chọn card có thể tắt các card Wi-Fi/LAN khác. Đọc danh sách không nâng quyền. Có mục mở card mạng để khôi phục thủ công.
 
@@ -96,7 +97,7 @@ Bỏ chọn **Bật** để trả riêng phím đó; tổ hợp đã nhập vẫ
 
 Luồng dùng: **copy/chọn ảnh → gửi → chờ hoàn tất → Ctrl+V**. F4/F8 bắt đầu câu hỏi mới; F9/Shift+F9 dùng dữ kiện trước. Shift+F9 chỉ bổ sung ảnh, không kèm chữ clipboard.
 
-Chọn vùng dùng ảnh cửa sổ được lấy trước khi bộ chọn mở. Kéo chuột và thả để gửi; Esc, chuột phải hoặc phím Hủy đã cấu hình hủy chọn. Clipboard đổi trong lúc chọn hoặc chờ AI được bảo vệ; dùng **Shift+F8** hoặc menu Copy để lấy đáp án hoàn tất. Không có cửa sổ chat tự bật khi trả lời.
+Chọn vùng dùng ảnh cửa sổ được lấy trước khi bộ chọn mở. Kéo chuột và thả để gửi; Esc, chuột phải hoặc phím Hủy đã cấu hình hủy chọn. Clipboard đổi trong lúc chọn hoặc chờ AI được bảo vệ; dùng **F7** hoặc menu Copy để lấy đáp án hoàn tất. Không có cửa sổ chat tự bật khi trả lời.
 
 Gửi lại một lượt hỏi tiếp bị hủy/lỗi giữ lịch sử đã hoàn tất trước đó, kể cả khi nội dung hỏi tiếp trùng câu cũ. Gửi lại lượt đã hoàn tất thay đáp án của lượt đó khi thành công. Phản hồi thiếu kết thúc, bị cắt do token, từ chối hoặc yêu cầu công cụ không được coi là đáp án hoàn tất để tự copy; phần thông báo đang xử lý của model cũng không được ghép vào đáp án cuối.
 
@@ -110,7 +111,7 @@ Giới hạn lịch sử API dùng đúng số ký tự đặt trong cài đặt
 
 Ảnh lưu riêng theo phiên trong `session-images.sqlite3`, bằng transaction SQLite và đồng bộ xuống đĩa trước khi gửi AI. Mở lại app hoặc chuyển phiên tự nạp lại đúng ảnh. Kho ảnh giữ tối đa 8 ảnh/32 MiB mỗi phiên và 256 MiB dữ liệu ảnh tổng; cache RAM tối đa 64 MiB. Cache có thể nạp lại từ đĩa. Nếu kho đầy, ảnh ở các phiên cũ bị loại và thông báo số ảnh thiếu được giữ qua restart; câu hỏi tiếp có thông tin thiếu ảnh để model không suy đoán.
 
-**Quản lý / xem ảnh…** có xem trước, xóa ảnh đang chọn và xóa tất cả ảnh của phiên; xóa cần xác nhận, không xóa lịch sử chữ. Đóng cửa sổ quản lý trước khi gửi/chụp câu hỏi mới. Kho ảnh hỏng hoặc không ghi được sẽ báo lỗi và giữ file cũ, không tự ghi đè. Đóng app rồi sao lưu `session.json`, `session-images.sqlite3` và `preferences.json` cùng nhau. Kho ảnh không mã hóa; `.gitignore` loại database và file journal khỏi source.
+**Ảnh & nội dung chat…** có xem trước, xóa ảnh đang chọn và xóa tất cả ảnh của phiên; xóa cần xác nhận, không xóa lịch sử chữ. Đóng cửa sổ quản lý trước khi gửi/chụp câu hỏi mới. Kho ảnh hỏng hoặc không ghi được sẽ báo lỗi và giữ file cũ, không tự ghi đè. Đóng app rồi sao lưu `session.json`, `session-images.sqlite3` và `preferences.json` cùng nhau. Kho ảnh không mã hóa; `.gitignore` loại database và file journal khỏi source.
 
 ## Mã nguồn theo chức năng
 
@@ -133,10 +134,12 @@ Giới hạn lịch sử API dùng đúng số ký tự đặt trong cài đặt
 
 Build bản chính: `./build.ps1`. Build đúng tên bản thử: `./build.ps1 -Name ClipboardAI_Region_Test`. Kết quả nằm trong `dist` cùng README, tài liệu này, cấu hình mẫu trống và SHA256. Repo chứa toàn bộ mã công khai, test và workflow build; không chứa API key, lịch sử cá nhân hoặc EXE build cục bộ.
 
-Chi tiết provider, giao thức custom và đăng nhập: [API_PROVIDERS.md](API_PROVIDERS.md). F7 đã bỏ; mở chat từ tray. Các provider API dùng key; riêng OpenAI Browser có luồng đăng nhập ChatGPT tích hợp qua Codex CLI chính thức.
+Chi tiết provider, giao thức custom và đăng nhập: [API_PROVIDERS.md](API_PROVIDERS.md). F7 copy gần nhất, Shift+F7 copy phiên đang chọn; mở chat từ tray. Các provider API dùng key; riêng OpenAI Browser có luồng đăng nhập ChatGPT tích hợp qua Codex CLI chính thức.
 # Nâng cấp quản lý và riêng tư
 
-Tray → **Hội thoại · Chẩn đoán · Riêng tư…**:
+Chat, bảng ảnh/chat và bảng quản lý dùng mặc định **420 × 560 px**, góc dưới bên phải màn hình đang có con trỏ, tránh thanh tác vụ. Có thể kéo đổi kích thước. Tab **Giao diện** trong bảng quản lý cho nhập kích thước mặc định, chọn góc dưới bên phải/giữa màn hình và lưu kích thước đang kéo. Lựa chọn lưu trong `preferences.json` và áp dụng ở lần mở tiếp theo; hỗ trợ màn hình phụ nằm bên trái màn hình chính.
+
+Tray → **Model / API / cài đặt → Quản lý hội thoại · Chẩn đoán · Riêng tư…**:
 
 - Hội thoại: tìm toàn bộ nội dung, đổi tên, mở phiên, xuất MD/JSON, sao lưu ZIP gồm lịch sử và ảnh (không gồm key). Đóng app trước khi giải nén hai file dữ liệu cạnh EXE để khôi phục.
 - Chẩn đoán: provider/model thực dùng, lỗi theo mã an toàn, proxy không chứa mật khẩu; đếm lần gọi gồm tóm tắt, lỗi và dự phòng; token chỉ cộng khi provider báo đủ. Thống kê trong RAM từ lúc mở app, tối đa 200 dòng; OpenAI Browser chưa báo token.
@@ -145,3 +148,5 @@ Tray → **Hội thoại · Chẩn đoán · Riêng tư…**:
 - Quản lý ảnh ghi số trang trong danh sách ảnh đang giữ, cho xem trước và xóa; cảnh báo ảnh bị loại vẫn giữ.
 
 Nội dung xuất và ZIP chưa mã hóa. Riêng tư không xóa clipboard, lịch sử cũ, thông tin đăng nhập hoặc dữ liệu đã gửi AI; dọn bộ nhớ của app không bảo đảm xóa vật lý mọi bản sao RAM/pagefile.
+
+Cửa sổ **Ảnh & nội dung chat của phiên…** có tab ảnh và tab nội dung hội thoại cùng phiên, kèm nút mở chat để hỏi tiếp. Menu copy theo phiên có mũi tên; chọn tên phiên sẽ chuyển phiên và copy đáp án cuối của phiên đó, không gọi AI. F7 copy đáp án gần nhất, Shift+F7 copy phiên đang chọn; F8 vẫn gửi bài mới.
