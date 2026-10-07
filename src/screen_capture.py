@@ -37,6 +37,13 @@ def capture_foreground_image(hwnd=None):
         if box[2] <= box[0] or box[3] <= box[1]:
             raise CaptureError("Cửa sổ không nằm trên màn hình; mở đề rồi F4")
         image = ImageGrab.grab(bbox=box, all_screens=True)
+        after = W.RECT()
+        if (user.GetForegroundWindow() != hwnd or user.IsIconic(hwnd)
+                or not user.GetWindowRect(hwnd, C.byref(after))
+                or (after.left, after.top, after.right, after.bottom) !=
+                   (rect.left, rect.top, rect.right, rect.bottom)):
+            image.close()
+            raise CaptureError("Cửa sổ đã đổi trong lúc chụp; chưa gửi AI. Nhấn F4 lại")
         if all(high <= 3 for low, high in image.convert('RGB').getextrema()):
             raise CaptureError("Ảnh chụp toàn đen; chưa gửi AI. Cửa sổ có thể được bảo vệ hoặc đang trống; mở đề rồi F4.")
         return image, box

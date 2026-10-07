@@ -1,5 +1,6 @@
 """Windows unit tests; desktop integration is opt-in, never a live API call."""
 import os
+import gc
 from pathlib import Path
 import sys
 import unittest
@@ -27,6 +28,13 @@ if "--desktop" not in sys.argv:
             type(case).__unittest_skip__ = True
             type(case).__unittest_skip_why__ = "Desktop integration: run scripts/run_tests.py --desktop locally"
 user, kernel, shell = native.setup_winapi()
+class OwnerThreadResult(unittest.TextTestResult):
+    def stopTest(self, test):
+        # Hidden Tk fixtures are created on this thread. Reclaim their callback
+        # cycles here, before a later HTTP/storage worker triggers cyclic GC.
+        gc.collect()
+        super().stopTest(test)
+
 with patch.object(native, "setup_winapi", return_value=(user, kernel, SimpleNamespace(Shell_NotifyIconW=Mock(return_value=True)))):
-    result = unittest.TextTestRunner(verbosity=1).run(suite)
+    result = unittest.TextTestRunner(verbosity=1, resultclass=OwnerThreadResult).run(suite)
 raise SystemExit(not result.wasSuccessful())

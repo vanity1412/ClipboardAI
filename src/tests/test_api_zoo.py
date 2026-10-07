@@ -79,8 +79,7 @@ class ZooTests(unittest.TestCase):
         response = {'data': [{'id': 'new-coder', 'input_modalities': ['text']},
                              {'id': 'new-reader', 'capabilities': {'vision': True}},
                              {'id': 'new-coder'}, {'id': 'unknown'}]}
-        with patch('urllib.request.build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(response).encode()
+        with patch('http_transport.request_json', return_value=(response, len(json.dumps(response).encode()))):
             models = discover_models(p)
         self.assertEqual([m['id'] for m in models], ['new-coder', 'new-reader', 'unknown'])
         refreshed = update_catalog(p, models)

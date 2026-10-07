@@ -111,6 +111,10 @@ def validated_preferences(data):
 
 def load_runtime_settings(config, path):
     valid_base, issues = validated_preferences(config)
+    # A rejected structured preference can come from the string-only .env
+    # loader. Remove it before consumers call dict()/get() on that value.
+    for name in issues:
+        config.pop(name, None)
     model = valid_base.get("OLLAMA_MODEL", "auto")
     thinking = model.startswith(("qwen3:", "qwen3.5:"))
     defaults = {

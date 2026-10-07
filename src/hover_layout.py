@@ -58,7 +58,7 @@ def grid_lines(cells, columns, measure, width):
     return rows
 
 
-def answer_pages(header, raw_rows, unknown, reason, copy_hint, measure, width):
+def answer_pages(header, raw_rows, unknown, reason, copy_hint, measure, width, notice=''):
     """Grid short lists; paginate complete long answers while hovered."""
     usable = max(1, width - 12)
     warning = ''
@@ -85,7 +85,7 @@ def answer_pages(header, raw_rows, unknown, reason, copy_hint, measure, width):
     if columns > 1 and warning and measure(header + ' · ' + warning) <= usable:
         header += ' · ' + warning
         warning = ''
-    footer = [value for value in (warning, copy_hint) if value]
+    footer = [value for value in (notice, warning, copy_hint) if value]
     if unknown and not cells and not copy_hint:
         footer.append('F9 chữ / Shift+F9 ảnh')
     body_limit = min(5 if columns == 2 else 4, MAX_HOVER_ROWS - 1 - len(footer))

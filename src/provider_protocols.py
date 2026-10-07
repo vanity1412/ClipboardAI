@@ -130,12 +130,14 @@ class EventStream:
         self.stop_reason = None
         self.started = False
         self.open_blocks = set()
+        self.usage = {}
 
     def feed(self, item):
         kind = item.get('type')
         text = ''
         if self.protocol == 'anthropic':
             if kind == 'message_start':
+                self.usage.update(item.get('message', {}).get('usage', {}))
                 if self.started:
                     raise RuntimeError('Anthropic trả stream sai thứ tự; clipboard giữ nguyên')
                 self.started = True
@@ -156,6 +158,7 @@ class EventStream:
                     raise RuntimeError('Anthropic trả stream sai thứ tự; clipboard giữ nguyên')
                 self.open_blocks.remove(item['index'])
             elif kind == 'message_delta':
+                self.usage.update(item.get('usage', {}))
                 if not self.started or self.open_blocks:
                     raise RuntimeError('Anthropic trả stream sai thứ tự; clipboard giữ nguyên')
                 reason = item.get('delta', {}).get('stop_reason')
@@ -164,7 +167,7 @@ class EventStream:
             elif kind == 'message_stop':
                 if not self.started or self.open_blocks or self.stop_reason is None:
                     raise RuntimeError('Anthropic chưa hoàn tất stream; clipboard giữ nguyên')
-                return '', dict(stop_reason=self.stop_reason, content=[self.blocks[k] for k in sorted(self.blocks)])
+                return '', dict(stop_reason=self.stop_reason, content=[self.blocks[k] for k in sorted(self.blocks)], usage=self.usage)
         elif kind == 'response.output_text.delta':
             text = item['delta']
         elif kind == 'response.completed':

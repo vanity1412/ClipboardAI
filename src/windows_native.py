@@ -17,6 +17,8 @@ from urllib.request import Request, urlopen, build_opener, HTTPRedirectHandler
 from urllib.error import HTTPError
 from api_zoo import APIHTTPError, APIConnectionError, selected_profile
 from urllib.parse import urlsplit
+from http_transport import open_http_connection, authority, response_headers, request_json, HTTPStatusError
+from text_safety import validate_unicode
 from coding_prompt import CODE_PROMPT
 from answer_policy import answer_instruction, tray_result, short_tooltip, STYLES, STYLE_LABELS
 from prompt_profiles import PRESETS, LABELS as PROMPT_LABELS, selected_prompt, instruction_for, prompt_preferences, merged_preferences, default_prompt
@@ -35,11 +37,15 @@ from hotkey_settings import (bindings as hotkey_bindings, DEFAULTS as HOTKEY_DEF
                              normalized_shortcuts, disabled_actions)
 PROMPT = CODE_PROMPT
 MAX_STREAM_RECORD_BYTES = 32 * 1024 * 1024
+LOG_MAX_BYTES = 2 * 1024 * 1024
+LOG_LOCK = threading.Lock()
 REPAIR = ""
 
 
 def fingerprint(text):
-    return hashlib.sha256(text.replace("\r\n", "\n").strip().encode("utf-8")).digest()
+    # Fingerprinting clipboard input must not crash startup on malformed UTF-16.
+    # The submission/response boundaries separately reject invalid text.
+    return hashlib.sha256(text.replace("\r\n", "\n").strip().encode("utf-8", errors='surrogatepass')).digest()
 
 
 def window_long_setter(user, pointer_size=None):
@@ -64,8 +70,12 @@ def read_config():
 def log_event(event, **fields):
     # Never log request content, responses, API keys, or upstream error bodies.
     try:
-        with (ROOT / "status.log").open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "event": event, **fields}) + "\n")
+        with LOG_LOCK:
+            path = ROOT / 'status.log'
+            if path.exists() and path.stat().st_size >= LOG_MAX_BYTES:
+                path.replace(path.with_name('status.previous.log'))
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "event": event, **fields}) + "\n")
     except OSError:
         pass
 
@@ -122,6 +132,24 @@ class AIClient:
                 pass
 
     def post(self, url, body, timeout, key=None, protocol='compatible'):
+        stats = getattr(self, 'activity', None)
+        started = time.monotonic()
+        data, error = None, None
+        try:
+            data = self._post(url, body, timeout, key, protocol)
+            return data
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            if stats is not None:
+                stats.record(urlsplit(url).hostname or 'API', body.get('model', ''),
+                             getattr(self, 'activity_phase', 'Trả lời'), started, data, error)
+
+    def _post(self, url, body, timeout, key=None, protocol='compatible'):
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise InterruptedError('Đã hủy yêu cầu')
+        validate_unicode(body)
         deadline = getattr(self, 'deadline', None)
         if deadline is not None:
             remaining = deadline - time.monotonic()
@@ -136,12 +164,26 @@ class AIClient:
         req = Request(url, data=json.dumps(body).encode("utf-8"), headers=headers)
         if body.get("stream"):
             return self.stream_post(url, body, timeout, key, protocol)
+        if self.cancel_event is not None:
+            try:
+                return request_json(url, headers, timeout, self.cancel_event,
+                    MAX_STREAM_RECORD_BYTES, method='POST', payload=req.data)
+            except HTTPStatusError as exc:
+                raise APIHTTPError(exc.status, exc.retry_after) from None
+            except ValueError:
+                raise AIResponseError('Phản hồi sai định dạng hoặc vượt giới hạn an toàn; clipboard giữ nguyên.', 'response_format') from None
         class NoRedirect(HTTPRedirectHandler):
             def redirect_request(self, *args, **kwargs):
                 return None
         try:
             with build_opener(NoRedirect()).open(req, timeout=None if not timeout else timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
+                raw = r.read(MAX_STREAM_RECORD_BYTES + 1)
+                if len(raw) > MAX_STREAM_RECORD_BYTES:
+                    raise AIResponseError('Phản hồi vượt giới hạn an toàn 32 MiB; clipboard giữ nguyên.', 'response_size')
+                try:
+                    return validate_unicode(json.loads(raw.decode('utf-8')))
+                except ValueError:
+                    raise AIResponseError('Phản hồi sai định dạng hoặc chứa Unicode không hợp lệ; clipboard giữ nguyên.', 'response_format') from None
         except HTTPError as exc:
             error = APIHTTPError(exc.code, exc.headers.get('Retry-After'))
             exc.close()
@@ -156,38 +198,30 @@ class AIClient:
         async def request():
             self.active_loop = asyncio.get_running_loop()
             self.active_task = asyncio.current_task()
-            if self.cancel_event.is_set():
+            cancel = self.cancel_event or threading.Event()
+            if cancel.is_set():
                 raise InterruptedError()
             address = urlsplit(url)
-            port = address.port or (443 if address.scheme == "https" else 80)
-            reader, writer = await asyncio.open_connection(address.hostname, port, ssl=True if address.scheme == "https" else None)
+            reader, writer, path, proxy_headers = await open_http_connection(url)
             try:
                 payload = json.dumps(body).encode("utf-8")
-                path = address.path or "/"
-                if address.query:
-                    path += "?" + address.query
-                header = f"POST {path} HTTP/1.1\r\nHost: {address.hostname}:{port}\r\nUser-Agent: ClipboardAI/2.0\r\nAccept: text/event-stream\r\nContent-Type: application/json\r\nContent-Length: {len(payload)}\r\nConnection: close\r\n\r\n"
+                selected_headers = dict(proxy_headers, Host=authority(address),
+                    **{'User-Agent': 'ClipboardAI/2.0', 'Accept': 'text/event-stream',
+                       'Content-Type': 'application/json', 'Content-Length': str(len(payload)), 'Connection': 'close'})
                 if protocol == 'anthropic':
-                    header = header[:-2] + 'x-api-key: ' + key + '\r\nanthropic-version: 2023-06-01\r\n\r\n'
+                    selected_headers.update({'x-api-key': key, 'anthropic-version': '2023-06-01'})
                 elif key:
-                    header = header[:-2] + "Authorization: Bearer " + key + "\r\n\r\n"
+                    selected_headers['Authorization'] = 'Bearer ' + key
+                if any('\r' in str(value) or '\n' in str(value) for value in selected_headers.values()):
+                    raise ValueError('HTTP header không hợp lệ')
+                header = 'POST ' + path + ' HTTP/1.1\r\n' + ''.join(
+                    name + ': ' + str(value) + '\r\n' for name, value in selected_headers.items()) + '\r\n'
                 writer.write(header.encode("ascii") + payload)
                 await writer.drain()
-                status = (await reader.readline()).split()
-                if len(status) < 2 or not status[1].isdigit():
-                    raise RuntimeError('API trả HTTP không hợp lệ')
-                headers = {}
-                while True:
-                    line = await reader.readline()
-                    if line in (b"\r\n", b"\n"):
-                        break
-                    if not line:
-                        raise APIConnectionError("Incomplete HTTP headers")
-                    name, value = line.decode("ascii").split(":", 1)
-                    headers[name.lower()] = value.strip().lower()
-                if status[1] != b'200':
-                    raise APIHTTPError(int(status[1]), headers.get('retry-after'))
-                chunked = "chunked" in headers.get("transfer-encoding", "")
+                status, headers = await response_headers(reader)
+                if status != 200:
+                    raise APIHTTPError(status, headers.get('retry-after'))
+                chunked = "chunked" in headers.get("transfer-encoding", "").lower()
                 content, pending, finish_reason, usage = [], b"", None, None
                 unsupported_message = {}
                 content_bytes = 0
@@ -195,7 +229,7 @@ class AIClient:
                 def flush_preview(force=False):
                     nonlocal last_preview
                     if callback and preview and (force or time.monotonic() - last_preview >= .08 or sum(map(len, preview)) >= 2048):
-                        if not self.cancel_event.is_set():
+                        if not cancel.is_set():
                             callback(''.join(preview))
                         preview.clear()
                         last_preview = time.monotonic()
@@ -212,7 +246,7 @@ class AIClient:
                     preview.append(value)
                     flush_preview()
                 while True:
-                    if self.cancel_event.is_set():
+                    if cancel.is_set():
                         raise InterruptedError()
                     if chunked:
                         size_line = await reader.readline()
@@ -253,7 +287,7 @@ class AIClient:
                                 flush_preview(True)
                                 return result
                         try:
-                            item = json.loads(line)
+                            item = validate_unicode(json.loads(line))
                         except (ValueError, TypeError, RecursionError):
                             raise AIResponseError("Stream trả JSON không hợp lệ; clipboard giữ nguyên.", "stream_format") from None
                         if not isinstance(item, dict):
@@ -444,7 +478,14 @@ class WindowsApp:
         if self.preference_errors:
             log_event("preferences_invalid", fields=self.preference_errors)
         self.client = AIClient(self.config)
+        from activity_stats import ActivityStats
+        self.activity = ActivityStats()
+        self.client.activity = self.activity
+        self.private_mode = False
+        self.mask_images = False
         self.session = Session(ROOT / "session.json")
+        self.async_storage = True
+        self.exiting = False
         migration = merged_preferences(self.config, self.session.mode)
         if migration:
             try:
@@ -510,7 +551,8 @@ class WindowsApp:
         self.closed = threading.Event()
         self.pending_write = None
         self.pending_image = None
-        self.images = SessionImages()
+        self.images = SessionImages(ROOT / 'session-images.sqlite3')
+        self.request_display.notice = self.images.warning(self.session.active_id)
         self.last_image = None
         self.preview_answer = ""
         self.preview_request = ""
@@ -867,15 +909,24 @@ class WindowsApp:
         if not is_chat(self.session.mode):
             self.set_text('answer', getattr(self, 'preview_answer', '') or self.session.last_answer)
             return
+        # Collect the visible tail only, rather than joining years of history
+        # on every stream update before discarding all but the last 180k chars.
         parts = []
-        for message in self.session.messages:
-            parts.append(('Bạn' if message['role'] == 'user' else 'AI') + ':\r\n' + message['content'])
         if self.busy and getattr(self, 'preview_request', ''):
             parts.append('Bạn:\r\n' + self.preview_request)
             parts.append('AI:\r\n' + (getattr(self, 'preview_answer', '') or 'Đang trả lời…'))
+        used = sum(len(part) + 4 for part in parts)
+        previous = []
+        for message in reversed(self.session.messages):
+            if used >= 180000:
+                break
+            part = ('Bạn' if message['role'] == 'user' else 'AI') + ':\r\n' + message['content']
+            previous.append(part[-180000:])
+            used += len(part) + 4
+        parts = list(reversed(previous)) + parts
         value = '\r\n\r\n'.join(parts)
         # Only the visible text is bounded; all conversation turns stay on disk.
-        if len(value) > 180000:
+        if used > 180000 or len(previous) < len(self.session.messages):
             value = '[Các tin nhắn cũ vẫn được lưu trong phiên]\r\n' + value[-180000:]
         self.set_text('answer', value)
         self.user.SendMessageW(self.controls['answer'], 0xB1, -1, -1)
@@ -945,6 +996,10 @@ class WindowsApp:
     def context_capacity(self):
         return int(self.config.get("SESSION_MAX_CHARS", "48000")) // 3 if self.is_deepseek else int(self.config.get("OLLAMA_NUM_CTX", "4096"))
 
+    def history_limit(self):
+        """UI history settings are characters; Ollama context is token capacity."""
+        return int(self.config.get('SESSION_MAX_CHARS', '48000')) if self.is_deepseek else self.context_capacity() * 2
+
     def token_limit(self):
         profile = selected_profile(self.config)
         if profile:
@@ -972,7 +1027,7 @@ class WindowsApp:
             value = self.region_notice
         if not self.busy and self.display_state().phase == 'idle':
             value = self.state
-        self.set_text("status", value + (' · Phím tắt tạm dừng' if not self.enabled else ''))
+        self.set_text("status", ('RIÊNG TƯ · chỉ RAM · ' if getattr(self, 'private_mode', False) else '') + value + (' · Phím tắt tạm dừng' if not self.enabled else ''))
         self.set_text("details", f"{getattr(self, 'last_api_used', '') or self.model_name()} · {len(self.session.messages)} tin nhắn")
         self.set_text('note', self.shortcut_help())
         self.set_text("pause", "Tạm dừng phím tắt" if self.enabled else "Bật phím tắt")
@@ -1153,6 +1208,10 @@ class WindowsApp:
 
     def resend_session(self):
         attempt_id = self.current_id
+        router = getattr(getattr(self, 'client', None), 'zoo_router', None)
+        profile = selected_profile(getattr(self, 'config', {}))
+        if profile and router is not None and hasattr(router, 'retry'):
+            router.retry(profile)
         if not self.enabled:
             self.state = "Phím tắt đang tạm dừng"
         elif is_chat(self.session.mode):
@@ -1233,6 +1292,7 @@ class WindowsApp:
             self.request_display = RequestDisplay()
             if self.session.last_answer:
                 self.request_display.finish('done', 0, self.session.last_answer)
+            self.request_display.notice = self.images.warning(ident)
             if getattr(self, 'panel_ready', False):
                 self.render_conversation()
         else:
@@ -1260,7 +1320,8 @@ class WindowsApp:
                 self.user.AppendMenuW(menu, flags | 0x10, submenu, title + "\t" + format_session_time(entry['updated_at']))
                 for offset, (action, label) in enumerate((('select', 'Chọn phiên'), ('chat', 'Mở chat'),
                         ('retry', 'Gửi lại yêu cầu'), ('copy', 'Copy câu trả lời'),
-                        ('images', 'Xóa ảnh đã thu thập'), ('save', 'Lưu lại lịch sử'), ('delete', 'Xóa phiên…'))):
+                        ('images', 'Xóa ảnh đã thu thập'), ('save', 'Lưu lại lịch sử'), ('delete', 'Xóa phiên…'),
+                        ('manage_images', 'Quản lý / xem ảnh…'))):
                     ident = 1001 + index if offset == 0 else 20000 + index * 10 + offset
                     commands[ident] = (entry['id'], action)
                     self.user.AppendMenuW(submenu, 1 if self.busy else 0, ident, label)
@@ -1287,6 +1348,8 @@ class WindowsApp:
                     self.command(111)
                 elif action == 'images':
                     self.command(222)
+                elif action == 'manage_images':
+                    self.command(223)
                 elif action == 'save':
                     self.command(208)
                 elif action == 'delete':
@@ -1439,6 +1502,9 @@ class WindowsApp:
         attempt_id = self.current_id
         if not self.enabled:
             self.state = "Phím tắt đang tạm dừng; bật lại trong menu tray"
+        elif getattr(self, 'images_manager_open', False):
+            self.state = 'Đóng cửa sổ quản lý ảnh trước khi chụp câu hỏi mới'
+            self.display_state().show_feedback(self.state)
         elif self.config.get("DEEPSEEK_MODEL") != "deepseek-flash":
             self.state = "Chụp ảnh chỉ có trong bản DeepSeek Flash"
         elif getattr(self, 'network_busy', False):
@@ -1547,6 +1613,18 @@ class WindowsApp:
         self.refresh_panel()
 
     def start_request(self, text, sequence=None, digest=None, action="problem", image_png=None, screenshot_hwnd=None, replace=False, capture_source="", capture_previous="", new_session=True):
+        if getattr(self, 'tools_open', False):
+            self.display_state().show_feedback('Đóng cửa sổ quản lý trước khi gửi')
+            return
+        if getattr(self, 'images_manager_open', False):
+            self.state = 'Đóng cửa sổ quản lý ảnh trước khi gửi yêu cầu mới'
+            self.display_state().show_feedback(self.state)
+            self.tooltip(self.state)
+            return
+        if getattr(self, 'exiting', False):
+            self.state = 'Đang lưu/khôi phục mạng trước khi thoát; chưa gửi yêu cầu mới'
+            self.tooltip(self.state)
+            return
         if getattr(self, 'region_pending', False):
             self.state = 'Đang chọn vùng; thả chuột để gửi hoặc Esc để hủy'
             self.tooltip(self.state)
@@ -1573,10 +1651,13 @@ class WindowsApp:
             return
         fresh = new_session and action in ('problem', 'image')
         try:
+            validate_unicode(text)
+            validate_unicode(capture_previous)
             history = self.session.context(self.context_capacity()) if not fresh and action not in ("problem", "capture") else []
             context = self.context_capacity()
+            char_limit = self.history_limit()
             if is_chat(self.session.mode):
-                if len(text) > context:
+                if len(text) > char_limit:
                     raise ValueError("Câu hỏi quá dài; tăng giới hạn lịch sử trong Cài đặt hoặc chia nội dung.")
             elif sum(len(m["content"]) for m in history) + len(text) + len(capture_previous) + len(PROMPT) > context * 3:
                 raise ValueError("Đề/lịch sử quá dài; tăng context hoặc tạo bài mới. Không tự cắt đề.")
@@ -1628,7 +1709,10 @@ class WindowsApp:
                 # Preserve the original retry context across failures/cancel:
                 # a retry of a completed turn keeps replacing that same pair.
                 self.session.last_request_state = 'retrying_completed' if replace_last else 'pending'
-            self.session.save()
+            if getattr(self, 'async_storage', False):
+                self.queue_session_save(self.session.save_async(), self.current_id, self.session.active_id)
+            else:
+                self.session.save()
         self.last_action = action
         self.pending_write = None
         self.notice_until = 0
@@ -1644,8 +1728,10 @@ class WindowsApp:
         if image_png is not None or screenshot_hwnd is not None:
             self.state = "Đang chụp / đọc ảnh"
         self.jobs.put_nowait(dict(id=self.current_id, text=text, history=history, mode=self.session.mode,
+            image_cache=self.images, mask_images=getattr(self, 'mask_images', False),
             session_id=self.session.active_id, image_generation=self.images.generation(self.session.active_id),
             config=reply_config(self.config, self.session.mode), context_capacity=context,
+            history_budget=max(0, char_limit - len(text)),
             memory_messages=memory_messages, replace_last=replace_last,
             summary=self.session.summary if not fresh and action != 'problem' else '', summary_count=min(self.session.summary_count, len(memory_messages)) if not fresh and action != 'problem' else 0,
             action=action, sequence=sequence, digest=digest, cancel=self.cancel_event, image_png=image_png, screenshot_hwnd=screenshot_hwnd,
@@ -1655,7 +1741,97 @@ class WindowsApp:
         if getattr(self, 'panel_ready', False):
             self.render_conversation()
 
+    def queue_session_save(self, future, request_id, session_id, completed=False):
+        future.add_done_callback(lambda finished: self.results.put(
+            ('session_saved', request_id, session_id, finished, completed)))
+
+    def change_privacy(self, enabled, clear=False):
+        if self.busy or getattr(self, 'images_manager_open', False):
+            raise ValueError('Chờ AI hoàn tất hoặc đóng quản lý ảnh trước khi đổi riêng tư')
+        if enabled and not self.private_mode:
+            if not self.session.close():
+                raise ValueError(self.session.error)
+            self.saved_session, self.saved_images = self.session, self.images
+        if self.private_mode and (clear or not enabled):
+            # Release the old RAM store even when a finished job still holds
+            # its cache object; saved normal history is a separate object.
+            self.session._sessions.clear()
+            self.session.messages.clear()
+            for field in ('problem', 'last_answer', 'last_request', 'capture_text', 'capture_source', 'summary', 'title'):
+                setattr(self.session, field, '')
+            with self.images.lock:
+                for ident in self.images.frames:
+                    self.images.versions[ident] = self.images.versions.get(ident, 0) + 1
+                self.images.frames.clear()
+                self.images.dropped.clear()
+        if not enabled and self.private_mode:
+            self.session, self.images = self.saved_session, self.saved_images
+            self.saved_session = self.saved_images = None
+        if enabled and (not self.private_mode or clear):
+            mode = self.session.mode
+            self.session, self.images = Session(None), SessionImages()
+            self.session.mode = mode
+            self.session.auto_copy = False
+            self.session.copy_modes = {str(m): False for m in MODE_ORDER}
+            self.mask_images = True
+        self.private_mode = enabled
+        self.current_id += 1
+        self.pending_write = self.last_image = self.pending_image = None
+        self.preview_answer = self.preview_request = self.last_completed_answer = ''
+        self.hover_text = ''
+        self.hover_pages = []
+        self.hover_layout_key = None
+        self.image_warning = ''
+        self.notice_until = 0
+        if hasattr(self, 'user'):
+            self.hide_tray_result()
+        self.last_request = self.session.last_request
+        self.last_api_used = ''
+        self.request_display = RequestDisplay()
+        self.set_text('problem', '')
+        self.set_text('answer', self.session.last_answer)
+        self.set_text('feedback', '')
+        if getattr(self, 'panel_ready', False):
+            self.user.SendMessageW(self.controls['mode'], 0x14E, MENU_MODES.index(purpose_mode(self.session.mode)), 0)
+            self.user.SendMessageW(self.controls['auto'], 0xF1, int(self.session.auto_copy), 0)
+            self.render_conversation()
+        self.state = 'RIÊNG TƯ · câu hỏi và ảnh chỉ trong RAM · không tự copy' if enabled else 'Đã bỏ phiên riêng tư; trở về lịch sử đã lưu'
+        self.display_state().status = self.state
+
+    def request_exit(self):
+        """Keep the message loop alive until history and network rollback finish."""
+        if getattr(self, 'exiting', False):
+            return
+        self.exiting = True
+        self.exit_storage_ready = False
+        self.cancel_request()
+        if getattr(self, 'tools_open', False):
+            self.tools_cancel.set()
+        if getattr(self, 'images_manager_open', False):
+            self.images_manager_cancel.set()
+        self.network.shutdown(timeout=0)
+        self.state = 'Đang lưu lịch sử trước khi thoát'
+        self.display_state().status = self.state
+        self.tooltip(self.state)
+        def finish_storage():
+            try:
+                # A protected unreadable archive must remain untouched. With
+                # no new conversation in RAM there is nothing to lose on Quit.
+                unreadable_empty = getattr(self.session, '_load_failed', False) and not any((
+                    self.session.messages, self.session.last_answer, self.session.problem,
+                    self.session.last_request, self.session.capture_text, self.session.summary))
+                ok = unreadable_empty or self.session.save()
+            except Exception:
+                ok = False
+            self.results.put(('exit_saved', ok))
+        threading.Thread(target=finish_storage, daemon=False).start()
+
     def command(self, ident):
+        if getattr(self, 'tools_open', False) and ident not in (2, 224, 109, 216):
+            self.display_state().show_feedback('Đóng cửa sổ quản lý trước khi đổi phiên/cấu hình')
+            return
+        if getattr(self, 'exiting', False) and ident not in (111, 215):
+            return
         if getattr(self, 'region_pending', False):
             if ident in (109, 203):
                 self.cancel_request()
@@ -1740,8 +1916,65 @@ class WindowsApp:
             self.tooltip(self.state)
             self.refresh_panel()
             return
+        if ident == 223:
+            if self.busy or getattr(self, 'images_manager_open', False):
+                return
+            from image_manager import open_manager
+            self.images_manager_open = True
+            self.images_manager_cancel = threading.Event()
+            session_id = self.session.active_id
+            def manager():
+                try:
+                    open_manager(self.images, session_id, self.results, self.images_manager_cancel)
+                except Exception:
+                    self.results.put(('images_closed',))
+                    self.results.put(('probe', 'Không mở được cửa sổ quản lý ảnh'))
+            try:
+                threading.Thread(target=manager, daemon=True).start()
+            except RuntimeError:
+                self.images_manager_open = False
+                self.display_state().show_feedback('Không mở được cửa sổ quản lý ảnh; thử lại')
+            return
+        if ident == 224:
+            if self.busy or getattr(self, 'tools_open', False) or getattr(self, 'images_manager_open', False):
+                return
+            from tools_panel import open_tools
+            from activity_stats import safe_proxies
+            if not self.session.save():
+                self.display_state().show_feedback(self.session.error)
+                return
+            router = getattr(self.client, 'zoo_router', None)
+            profiles = [dict(id=p['id'], name=p['name'], state=router.profile_state(p) if router else 'Sẵn sàng')
+                        for p in self.config.get('API_ZOO', {}).get('profiles', [])]
+            snapshot = dict(archive=self.session.archive_snapshot(), stats=self.activity.snapshot(),
+                            model=self.config.get('SELECTED_MODEL', self.config.get('DEEPSEEK_MODEL', '')),
+                            proxies=safe_proxies(), profiles=profiles, private=self.private_mode, mask=self.mask_images,
+                            last_provider=getattr(self, 'last_api_used', ''), last_status=self.state)
+            self.tools_open = True
+            self.tools_cancel = threading.Event()
+            def tools():
+                try:
+                    open_tools(snapshot, self.images, self.results, self.tools_cancel)
+                except Exception:
+                    self.results.put(('tools_closed',))
+                    self.results.put(('probe', 'Không mở được cửa sổ quản lý'))
+            try:
+                threading.Thread(target=tools, daemon=True).start()
+            except RuntimeError:
+                self.tools_open = False
+            return
         if ident == 222:
-            self.images.clear(self.session.active_id)
+            if self.busy:
+                self.display_state().show_feedback('Chờ AI hoàn tất hoặc hủy trước khi xóa ảnh')
+                return
+            try:
+                self.images.clear(self.session.active_id)
+            except ValueError as exc:
+                self.display_state().show_feedback(str(exc))
+                self.tooltip(str(exc))
+                return
+            self.display_state().notice = ''
+            self.image_warning = ''
             self.last_image = None
             self.pending_image = None
             self.set_text('problem_label', 'Câu hỏi · Enter gửi · Shift+Enter xuống dòng')
@@ -1807,8 +2040,10 @@ class WindowsApp:
             self.select_model(ident)
             return
         elif ident == 208:
+            saved = self.session.save()
             self.state = ("Đã lưu lại lịch sử; kết quả và các phiên đã giữ trên ổ đĩa."
-                          if self.session.save() else self.session.error)
+                          if saved else self.session.error)
+            self.display_state().status = '' if saved else self.state
             self.tooltip(self.state)
         elif ident == 205:
             self.cancel_request()
@@ -1855,8 +2090,18 @@ class WindowsApp:
                     self.refresh_panel()
                     return
             else:
-                self.images.clear(self.session.active_id)
-                self.session.reset()
+                old_session = self.session.active_id
+                if not self.session.reset():
+                    self.state = self.session.error or 'Chưa xóa được phiên; lịch sử và ảnh cũ vẫn giữ'
+                    self.tooltip(self.state)
+                    self.refresh_panel()
+                    return
+                try:
+                    self.images.clear(old_session)
+                except ValueError as exc:
+                    self.display_state().show_feedback('Đã xóa lịch sử chữ; ' + str(exc))
+                self.last_image = None
+                self.last_completed_answer = ''
             self.last_request = ""
             self.pending_image = None
             self.preview_answer = self.preview_request = ""
@@ -2135,6 +2380,8 @@ class WindowsApp:
                 self.client.deadline = time.monotonic() + job['config']['REPLY_TIMEOUT_S'] if 'REPLY_TIMEOUT_S' in job.get('config', {}) else None
                 self.client.on_stream = lambda delta: self.results.put(('stream', job['id'], delta))
                 self.client.zoo_notify = lambda message: self.results.put(('zoo_progress', job['id'], message))
+                self.client.activity_phase = 'Trả lời'
+                image_cache = job.get('image_cache', self.images)
                 job_capacity = job.get("context_capacity", self.context_capacity())
                 history = list(job["history"])
                 text = job["text"]
@@ -2154,31 +2401,49 @@ class WindowsApp:
                     if job["cancel"].is_set():
                         raise InterruptedError()
                     self.results.put(("captured", job["id"]))
+                if png is not None and job.get('mask_images'):
+                    from image_redaction import review_png
+                    png = review_png(png, job['cancel'])
                 if is_chat(job['mode']):
                     from conversation_memory import prepare_history
                     memory = job.get('memory_messages', history)
                     if any(SECRET.search(m['content']) for m in memory):
                         raise ValueError('Lịch sử có khóa/mật khẩu; chưa gửi')
                     history, summary, count = prepare_history(self.client, memory, job.get('summary', ''), job.get('summary_count', 0),
-                        max(1000, job_capacity * 2 - len(text)), job['cancel'],
+                        job.get('history_budget', max(1000, job_capacity * 2 - len(text))), job['cancel'],
                         lambda status: self.results.put(('zoo_progress', job['id'], status)))
                     if SECRET.search(summary):
                         raise ValueError('Tóm tắt có khóa/mật khẩu; chưa gửi')
                     job['summary'], job['summary_count'] = summary, count
-                    frames = self.images.get(job['session_id'])
+                    frames = image_cache.get(job['session_id'])
+                    if image_cache.error and (png is not None or any('[Ảnh đính kèm]' in m['content'] for m in memory)):
+                        raise ValueError(image_cache.error)
                     if png is not None:
-                        frames = self.images.add(job['session_id'], png, job['image_generation'])
+                        frames = image_cache.add(job['session_id'], png, job['image_generation'])
                         self.results.put(('image_ready', job['id'], job['session_id'], png))
                     content = text
+                    warning = image_cache.warning(job['session_id'])
+                    if warning:
+                        self.results.put(('image_warning', job['id'], warning))
                     if frames:
                         import base64
-                        content = [{'type': 'text', 'text': text}] + [
+                        content = [{'type': 'text', 'text': content}] + [
                             {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' +
                              base64.b64encode(frame).decode('ascii'), 'detail': 'original'}} for frame in frames]
                     instruction = instruction_for(job['mode'], job['config'])
+                    if warning:
+                        instruction += '\nThông tin ảnh đính kèm: ' + warning + ' Không suy đoán nội dung ảnh đã thiếu.'
                     job['model_started'] = time.monotonic()
                     self.results.put(('model_started', job['id'], job['model_started']))
                     answer, provider = self.client.ask(content, history, instruction=instruction)
+                    try:
+                        validate_unicode(answer)
+                        if not isinstance(answer, str) or not answer.strip():
+                            raise ValueError()
+                        if len(answer.encode('utf-8')) > MAX_STREAM_RECORD_BYTES:
+                            raise ValueError()
+                    except ValueError:
+                        raise AIResponseError('AI trả nội dung không hợp lệ hoặc vượt giới hạn; clipboard giữ nguyên.', 'response_format') from None
                     job['model_seconds'] = max(0, int(time.monotonic() - job['model_started']))
                     if job['cancel'].is_set():
                         raise InterruptedError()
@@ -2205,6 +2470,12 @@ class WindowsApp:
                 self.client.cancel_event = None
                 self.client.on_stream = None
                 self.client.deadline = None
+                job.pop('image_cache', None)
+                # Do not retain finished screenshots/prompts while waiting
+                # for the next queue item. Result events own necessary output.
+                png = content = text = answer = image_cache = None
+                frames = history = memory = turns = []
+                job = None
 
     def menu(self):
         self.hide_tray_result()
@@ -2221,6 +2492,8 @@ class WindowsApp:
             self.user.AppendMenuW(menu, 0, 207, 'Hội thoại / thao tác phiên — ' + self.key_label(207))
             self.user.AppendMenuW(menu, 0, 202, 'Hỏi tiếp từ clipboard — ' + self.key_label(202))
             self.user.AppendMenuW(menu, 0 if self.session.last_answer else 1, 111, "Copy đáp án của phiên đang chọn")
+            self.user.AppendMenuW(menu, 1 if self.busy else 0, 223, 'Quản lý / xem ảnh của phiên…')
+            self.user.AppendMenuW(menu, 1 if self.busy else 0, 224, 'Hội thoại · Chẩn đoán · Riêng tư…')
             can_copy = bool(getattr(self, 'last_completed_answer', '') or self.session.last_answer)
             self.user.AppendMenuW(menu, 0 if can_copy else 1, 215, 'Copy đáp án gần nhất — ' + self.key_label(215))
             self.user.AppendMenuW(menu, 1 if self.busy else 0, 107, 'Gửi lại — ' + self.key_label(213))
@@ -2314,7 +2587,7 @@ class WindowsApp:
             self.user.SetForegroundWindow(self.hwnd)
             choice = self.user.TrackPopupMenu(menu, 0x100 | 2, point.x, point.y, 0, self.hwnd, None)
             if choice == 2:
-                self.user.DestroyWindow(self.hwnd)
+                self.request_exit()
             elif choice == 3:
                 self.settings_visible = False
                 self.layout_panel()
@@ -2382,6 +2655,82 @@ class WindowsApp:
             except queue.Empty:
                 break
             kind = result[0]
+            if kind == 'tools_closed':
+                self.tools_open = False
+                continue
+            if kind == 'tools_action':
+                if self.busy or getattr(self, 'exiting', False):
+                    continue
+                _, action, value = result
+                try:
+                    if action == 'select':
+                        self.select_session(value)
+                    elif action == 'rename':
+                        if not self.session.rename(*value):
+                            raise ValueError(self.session.error or 'Chưa đổi được tên')
+                        self.state = 'Đã đổi tên hội thoại'
+                    elif action == 'retry_provider':
+                        from api_zoo import ZooRouter
+                        if not hasattr(self.client, 'zoo_router'):
+                            self.client.zoo_router = ZooRouter()
+                        profile = next(p for p in self.config['API_ZOO']['profiles'] if p['id'] == value)
+                        self.client.zoo_router.retry_manual(profile)
+                        self.state = 'Đã bỏ khóa tạm; gửi lại để thử provider'
+                    elif action == 'mask':
+                        self.mask_images = bool(value)
+                        self.state = 'Đã ' + ('bật' if value else 'tắt') + ' che ảnh trước khi gửi'
+                    elif action in ('privacy', 'clear_private'):
+                        self.change_privacy(bool(value) if action == 'privacy' else True, clear=action == 'clear_private')
+                    self.tooltip(self.state)
+                    self.refresh_panel()
+                except (ValueError, OSError, StopIteration) as exc:
+                    self.state = str(exc) if isinstance(exc, ValueError) else 'Không hoàn tất thao tác; kiểm tra dữ liệu'
+                    self.display_state().show_feedback(self.state)
+                continue
+            if kind == 'images_closed':
+                self.images_manager_open = False
+                self.display_state().feedback = ''
+                continue
+            if kind == 'images_changed':
+                if result[1] == self.session.active_id:
+                    self.last_image = self.pending_image = None
+                    self.display_state().notice = self.images.warning(result[1])
+                continue
+            if kind == 'exit_saved':
+                if not result[1]:
+                    self.exiting = False
+                    self.network.abort_shutdown()
+                    self.state = self.session.error or 'Chưa lưu được lịch sử; app vẫn mở để lưu lại hoặc copy đáp án'
+                else:
+                    self.exit_storage_ready = True
+                    self.state = 'Đang khôi phục mạng trước khi thoát'
+                self.display_state().status = self.state
+                self.tooltip(self.state)
+                continue
+            if kind == 'session_saved':
+                _, request_id, session_id, future, completed = result
+                if request_id != self.current_id or session_id != self.session.active_id:
+                    continue
+                try:
+                    saved = future.result()
+                except Exception:
+                    saved = False
+                if not saved:
+                    self.state = self.session.error or 'Đã có kết quả nhưng chưa lưu lịch sử; chọn Lưu lại lịch sử trong F6'
+                    self.display_state().status = self.state
+                    self.tooltip(self.state)
+                elif completed and not getattr(self, 'exiting', False) and not self.busy:
+                    self.state = 'Hoàn tất; kết quả đã lưu trong phiên'
+                    self.display_state().status = ''
+                    if getattr(self, 'last_api_used', ''):
+                        self.state += ' — ' + self.last_api_used[:80]
+                    self.tooltip(self.state)
+                continue
+            if kind == 'image_warning':
+                if result[1] == self.current_id:
+                    self.image_warning = result[2]
+                    self.display_state().notice = result[2]
+                continue
             if kind == 'region_done':
                 self.finish_region_capture(result)
                 continue
@@ -2427,7 +2776,13 @@ class WindowsApp:
                 continue
             if kind == 'stream':
                 if result[1] == self.current_id and self.busy:
-                    self.preview_answer = '' if result[2] is None else self.preview_answer + result[2]
+                    try:
+                        validate_unicode(result[2])
+                    except ValueError:
+                        self.cancel_event.set()
+                        self.client.cancel()
+                        continue
+                    self.preview_answer = '' if result[2] is None else (self.preview_answer + result[2])[-180000:]
                     stream_dirty = True
                 continue
             if kind == 'zoo_closed':
@@ -2553,6 +2908,15 @@ class WindowsApp:
                     self.state = "Chưa đọc được chữ đề; phóng to chữ và F4 lại. Bản nháp trước vẫn giữ."
             else:
                 answer, turns = result[2:]
+                try:
+                    validate_unicode(answer)
+                    validate_unicode(turns)
+                except ValueError:
+                    self.state = 'AI trả Unicode không hợp lệ; chưa lưu/copy đáp án, chọn Gửi lại'
+                    self.display_state().finish('failed', job.get('model_seconds', 0), error=self.state)
+                    self.pending_write = None
+                    self.tooltip(self.state)
+                    continue
                 if job["action"] == "problem":
                     self.session.messages = []
                 if job.get('replace_last'):
@@ -2562,16 +2926,28 @@ class WindowsApp:
                     self.session.summary_count = job.get('summary_count', 0)
                     if not self.session.problem:
                         self.session.problem = job['text']
-                saved = self.session.commit(turns, answer, job["text"] if job["action"] == "problem" else None)
+                if getattr(self, 'async_storage', False):
+                    future = self.session.commit_async(turns, answer, job['text'] if job['action'] == 'problem' else None)
+                    self.queue_session_save(future, job['id'], self.session.active_id, completed=True)
+                    saved = False
+                    saving = True
+                else:
+                    saved = self.session.commit(turns, answer, job["text"] if job["action"] == "problem" else None)
+                    saving = False
                 self.display_state().finish('done', job.get('model_seconds', self.display_state().seconds()), answer,
                                             copy='pending' if self.session.auto_copy and self.enabled and job['sequence'] is not None else 'manual')
                 self.last_completed_answer = answer
                 self.set_text("answer", answer)
-                self.state = ("Hoàn tất; kết quả đã lưu trong phiên" if saved else
+                self.state = ('Hoàn tất; đang lưu lịch sử' if saving else "Hoàn tất; kết quả đã lưu trong phiên" if saved else
                               "Đã có kết quả nhưng chưa lưu lịch sử; đừng thoát app, kiểm tra ổ đĩa/quyền ghi.")
-                if saved and job.get('api_used'):
+                self.display_state().status = self.state if saving or not saved else ''
+                if job.get('api_used'):
                     self.state += ' — ' + job['api_used'][:80]
                     self.last_api_used = job['api_used']
+                images = getattr(self, 'images', None)
+                warning = images.warning(self.session.active_id) if images is not None else ''
+                if warning:
+                    self.display_state().notice = warning
                 if self.session.auto_copy and self.enabled and job["sequence"] is not None:
                     self.pending_write = (answer, job["sequence"], job["digest"])
                 else:
@@ -2596,6 +2972,10 @@ class WindowsApp:
         self.refresh_panel()
         self.tooltip(self.state)
         self.update_notice()
+        if getattr(self, 'exiting', False) and getattr(self, 'exit_storage_ready', False):
+            if not getattr(self, 'images_manager_open', False) and not getattr(self, 'tools_open', False) and self.network.shutdown(timeout=0):
+                self.user.DestroyWindow(self.hwnd)
+                return
         if self.self_test:
             # This runs inside the actual packaged Windows message loop.
             report = {"ok": True, "backend": "Windows native", "tray": True, "clipboard_listener": True,
@@ -2636,7 +3016,7 @@ class WindowsApp:
                     self.menu()
                 return 0
             if msg == 0x0312:
-                if getattr(self, 'hotkey_open', False) or not getattr(self, 'enabled', True):
+                if getattr(self, 'exiting', False) or getattr(self, 'hotkey_open', False) or not getattr(self, 'enabled', True):
                     return 0
                 shortcut_config = getattr(self, 'config', {})
                 if wp not in hotkey_bindings(shortcut_config.get('HOTKEYS'), shortcut_config.get('HOTKEYS_DISABLED')):
@@ -2689,6 +3069,10 @@ class WindowsApp:
                 if getattr(self, 'region_pending', False):
                     self.region_cancel.set()
                 self.client.cancel()
+                # Normal exit already waited for these; this also covers OS
+                # teardown and external DestroyWindow callers.
+                self.network.shutdown(timeout=0)
+                self.session.close()
                 if getattr(self, 'hover_window', None):
                     self.user.DestroyWindow(self.hover_window)
                     if getattr(self, 'hover_font', None):

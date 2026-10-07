@@ -6,15 +6,29 @@ from prompt_profiles import selected_prompt, instruction_for, default_prompt, me
 
 def open_editor(config, mode, results):
     import tkinter as tk
+    window = None
+    try:
+        window = tk.Tk()
+        _open_editor(window, config, mode, results)
+    finally:
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+        results.put(('prompt_closed',))
+
+
+def _open_editor(window, config, mode, results):
+    import tkinter as tk
     from tkinter import ttk
-    window = tk.Tk()
     window.title('Sửa prompt hiện tại')
     window.geometry('660x460')
     frame = ttk.Frame(window, padding=12)
     frame.pack(fill='both', expand=True)
     config.update(merged_preferences(config, mode))
-    selected_mode = tk.StringVar(value=MENU_LABELS[purpose_mode(mode)])
-    chosen = tk.StringVar()
+    selected_mode = tk.StringVar(master=window, value=MENU_LABELS[purpose_mode(mode)])
+    chosen = tk.StringVar(master=window)
     selectors = []
     for label, variable, choices in (
         ('Áp dụng cho', selected_mode, [MENU_LABELS[m] for m in MENU_MODES]),
@@ -27,9 +41,9 @@ def open_editor(config, mode, results):
     ttk.Label(frame, text='Sửa nội dung rồi Lưu để dùng prompt riêng. Áp dụng từ yêu cầu tiếp theo.').pack(anchor='w')
     text = tk.Text(frame, wrap='word', height=12, undo=True)
     text.pack(fill='both', expand=True, pady=8)
-    status = tk.StringVar()
+    status = tk.StringVar(master=window)
     ttk.Label(frame, textvariable=status, wraplength=620).pack(anchor='w')
-    local = queue.Queue()
+    pending, save_counter, poll_timer, closed = [], [0], [None], [False]
 
     def current_mode():
         return next(m for m in MENU_MODES if MENU_LABELS[m] == selected_mode.get())
@@ -72,22 +86,48 @@ def open_editor(config, mode, results):
     def save():
         style = 'custom' if text.edit_modified() else current_style()
         content = text.get('1.0', 'end-1c')
+        local = queue.Queue()
+        save_counter[0] += 1
+        snapshot = (save_counter[0], current_mode(), chosen.get(), content)
+        pending.append((snapshot, local))
         results.put(('prompt_save', current_mode(), style, content, local))
         status.set('Đang lưu…')
 
     def poll():
-        try:
-            while True:
+        if closed[0]:
+            return
+        for snapshot, local in pending[:]:
+            try:
                 event = local.get_nowait()
-                status.set(event[1])
-                if event[0] == 'saved':
-                    config.update(event[2])
+            except queue.Empty:
+                continue
+            pending.remove((snapshot, local))
+            same_view = snapshot[1:] == (current_mode(), chosen.get(), text.get('1.0', 'end-1c'))
+            if snapshot[0] == save_counter[0]:
+                status.set(event[1] if same_view else 'Đã xử lý bản trước; nội dung hiện tại chưa được lưu.')
+            if event[0] == 'saved':
+                config.update(event[2])
+                if same_view:
                     refresh_choices()
-                    chosen.set('Mặc định' if event[3] == default_prompt(current_mode()) else 'Theo yêu cầu' if event[3] == 'free' else 'Prompt riêng')
+                    style = event[3]
+                    label = 'Mặc định' if style == default_prompt(current_mode()) else 'Theo yêu cầu' if style == 'free' else 'Prompt riêng'
+                    if style not in (default_prompt(current_mode()), 'free', 'custom'):
+                        actual = instruction_for(current_mode(), config)
+                        label = next((name for name, pair in selections.items() if pair == (style, actual)), 'Prompt hiện tại')
+                        if label == 'Prompt hiện tại':
+                            selections[label] = (style, actual)
+                            selectors[1]['values'] = list(selections)
+                    chosen.set(label)
                     text.edit_modified(False)
-        except queue.Empty:
-            pass
-        window.after(100, poll)
+        poll_timer[0] = window.after(100, poll)
+
+    def close():
+        closed[0] = True
+        if poll_timer[0]:
+            window.after_cancel(poll_timer[0])
+            poll_timer[0] = None
+        window.destroy()
+    window.protocol('WM_DELETE_WINDOW', close)
 
     ttk.Button(frame, text='Lưu cho chế độ này', command=save).pack(anchor='e', pady=(8, 0))
     load()
@@ -97,4 +137,10 @@ def open_editor(config, mode, results):
     try:
         window.mainloop()
     finally:
-        results.put(('prompt_closed',))
+        closed[0] = True
+        if poll_timer[0]:
+            try:
+                window.after_cancel(poll_timer[0])
+            except tk.TclError:
+                window.tk.call('after', 'cancel', poll_timer[0])
+            poll_timer[0] = None

@@ -1,6 +1,7 @@
 """Official CLI event regressions; no login, network or child process."""
 import tempfile
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -73,6 +74,65 @@ class BrowserCompletionTests(unittest.TestCase):
         self.session.cancel.set()
         with self.assertRaises(InterruptedError):
             self.session.ask('model', [{'role': 'user', 'content': 'question'}], 3)
+
+    def test_discovery_deadline_prevents_later_requests_before_sending(self):
+        self.session.deadline = 100
+        self.session.send = Mock()
+        with patch('browser_provider.time.monotonic', return_value=100):
+            with self.assertRaises(TimeoutError):
+                BrowserSession.request(self.session, 'model/list', {})
+        self.session.send.assert_not_called()
+
+    def test_already_canceled_discovery_never_launches_child_process(self):
+        self.session.cancel.set()
+        with patch('browser_provider.subprocess.Popen') as popen:
+            with self.assertRaises(InterruptedError):
+                self.session.__enter__()
+        popen.assert_not_called()
+
+    def test_new_profiles_prefer_os_store_without_breaking_existing_file_sessions(self):
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as folder:
+                session = BrowserSession({'id': 'synthetic'}, folder)
+                if legacy:
+                    (session.home / 'auth.json').write_text('{}', encoding='utf-8')
+                process = Mock(); process.poll.return_value = 0
+                session.request = Mock(return_value={})
+                with patch('browser_provider.codex_executable', return_value='synthetic-cli'), \
+                     patch('browser_provider.subprocess.Popen', return_value=process) as popen, \
+                     patch.object(session, '_read'), patch.object(session, 'send'):
+                    with session:
+                        self.assertIn('cli_auth_credentials_store="' + ('file' if legacy else 'auto') + '"',
+                                      popen.call_args.args[0])
+
+    def test_stalled_child_input_pipe_is_released_on_cancel_or_deadline(self):
+        for canceled in (True, False):
+            with self.subTest(canceled=canceled):
+                self.session.cancel.clear()
+                release = threading.Event()
+                process = Mock(); process.poll.return_value = None
+                process.kill.side_effect = release.set
+                def blocked_write(_):
+                    if not release.wait(1):
+                        raise AssertionError('Blocked child pipe was not interrupted')
+                    raise BrokenPipeError()
+                process.stdin.write.side_effect = blocked_write
+                self.session.process = process
+                self.session.write_deadline = None if canceled else time.monotonic() + .05
+                timer = threading.Timer(.05, self.session.cancel.set) if canceled else None
+                if timer:
+                    timer.start()
+                before = time.monotonic()
+                try:
+                    with self.assertRaises(InterruptedError if canceled else TimeoutError):
+                        BrowserSession.send(self.session, {'synthetic': 'question'})
+                    self.assertLess(time.monotonic() - before, .8)
+                    process.kill.assert_called_once()
+                finally:
+                    release.set()
+                    if timer:
+                        timer.join()
+                    self.session.process = None
 
 
 if __name__ == '__main__':

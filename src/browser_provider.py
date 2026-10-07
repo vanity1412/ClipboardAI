@@ -32,21 +32,25 @@ def codex_executable():
 
 
 class BrowserSession:
-    def __init__(self, profile, auth_root, cancel=None):
+    def __init__(self, profile, auth_root, cancel=None, deadline=None):
         ident = profile.get('id', '')
         if not auth_root or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', ident):
             raise ValueError('Thiếu thư mục đăng nhập hoặc ID OpenAI Browser không hợp lệ')
         self.home = Path(auth_root).resolve() / ident
         self.home.mkdir(parents=True, exist_ok=True)
         self.cancel = cancel
+        self.deadline = deadline
         self.events = queue.Queue()
         self.deferred = []
         self.counter = 0
         self.process = None
         self.temporary = None
         self.login_id = None
+        self.reader_thread = None
+        self.write_deadline = None
 
     def __enter__(self):
+        self.check_wait(self.deadline)
         executable = codex_executable()
         self.temporary = tempfile.TemporaryDirectory(prefix='ClipboardAI_Browser_')
         environment = os.environ.copy()
@@ -54,7 +58,8 @@ class BrowserSession:
         # Do not inherit credentials or third-party provider overrides.
         for key in ('OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'):
             environment.pop(key, None)
-        command = [executable, 'app-server', '-c', 'cli_auth_credentials_store="file"',
+        store = 'file' if (self.home / 'auth.json').exists() else 'auto'
+        command = [executable, 'app-server', '-c', 'cli_auth_credentials_store="' + store + '"',
                    '-c', 'features.shell_tool=false', '-c', 'features.shell_snapshot=false',
                    '-c', 'features.plugins=false', '-c', 'features.apps=false',
                    '-c', 'features.memories=false', '-c', 'features.multi_agent=false',
@@ -64,7 +69,8 @@ class BrowserSession:
             self.process = subprocess.Popen(command, cwd=self.temporary.name, env=environment,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            threading.Thread(target=self._read, daemon=True).start()
+            self.reader_thread = threading.Thread(target=self._read, daemon=True)
+            self.reader_thread.start()
             self.request('initialize', {'clientInfo': {'name': 'clipboardai', 'title': 'ClipboardAI', 'version': '3.0'}})
             self.send({'method': 'initialized', 'params': {}})
             return self
@@ -94,13 +100,40 @@ class BrowserSession:
             self.events.put({'bridge_closed': True})
 
     def send(self, value):
+        process = self.process
+        finished, interrupted = threading.Event(), []
+        deadline = self.write_deadline if self.write_deadline is not None else time.monotonic() + 30
+        def watch_write():
+            while not finished.wait(.05):
+                try:
+                    self.check_wait(deadline)
+                except (InterruptedError, TimeoutError) as exc:
+                    interrupted.append(exc)
+                    try:
+                        if process is not None and process.poll() is None:
+                            process.kill()  # Closing its pipe releases a blocked write.
+                    except OSError:
+                        pass
+                    return
+        watcher = threading.Thread(target=watch_write, daemon=True)
+        watcher.start()
         try:
-            self.process.stdin.write(json.dumps(value, ensure_ascii=False).encode('utf-8') + b'\n')
-            self.process.stdin.flush()
+            process.stdin.write(json.dumps(value, ensure_ascii=False).encode('utf-8') + b'\n')
+            process.stdin.flush()
         except (OSError, ValueError, AttributeError):
+            if interrupted:
+                raise interrupted[0] from None
+            self.check_wait(deadline)
             raise RuntimeError('Kết nối Codex CLI đã đóng; kiểm tra bản CLI rồi thử lại') from None
+        finally:
+            finished.set()
+            watcher.join(timeout=.1)
+        if interrupted:
+            raise interrupted[0]
 
     def check_wait(self, deadline):
+        if self.deadline is not None:
+            deadline = min(deadline, self.deadline) if deadline is not None else self.deadline
         if self.cancel and self.cancel.is_set():
             raise InterruptedError('Đã hủy yêu cầu')
         if deadline is not None and time.monotonic() >= deadline:
@@ -124,8 +157,13 @@ class BrowserSession:
     def request(self, method, params, timeout=30):
         self.counter += 1
         ident = self.counter
-        self.send({'id': ident, 'method': method, 'params': params})
         deadline = time.monotonic() + timeout if timeout else None
+        self.check_wait(deadline)
+        self.write_deadline = deadline
+        try:
+            self.send({'id': ident, 'method': method, 'params': params})
+        finally:
+            self.write_deadline = None
         while True:
             event = self.next_event(deadline)
             if event.get('id') == ident:
@@ -268,10 +306,13 @@ class BrowserSession:
         process = self.process
         if process is not None:
             if self.login_id and process.poll() is None:
+                self.write_deadline = time.monotonic() + .5
                 try:
                     self.send({'id': 999999, 'method': 'account/login/cancel', 'params': {'loginId': self.login_id}})
-                except RuntimeError:
+                except (RuntimeError, InterruptedError, TimeoutError):
                     pass
+                finally:
+                    self.write_deadline = None
             if process.poll() is None:
                 process.terminate()
                 try:
@@ -279,6 +320,9 @@ class BrowserSession:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=3)
+            if self.reader_thread is not None:
+                self.reader_thread.join(timeout=.5)
+                self.reader_thread = None
             for stream in (process.stdin, process.stdout):
                 if stream:
                     stream.close()

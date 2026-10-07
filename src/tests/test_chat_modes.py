@@ -110,11 +110,16 @@ class ChatTests(unittest.TestCase):
         client.ask.assert_not_called()
         self.assertEqual(client.config, {})
 
-    def test_oversized_last_turn_is_explicit_not_silently_dropped(self):
+    def test_oversized_last_turn_is_summarized_without_deleting_original(self):
         client = Mock(config={})
-        with self.assertRaises(ValueError):
-            prepare_history(client, [dict(role='user', content='x' * 5000)], '', 0, 2000, threading.Event(), Mock())
-        client.ask.assert_not_called()
+        client.ask.return_value = ('Preserved user request.', 'mock')
+        messages = [dict(role='user', content='x' * 5000)]
+        history, summary, count = prepare_history(client, messages, '', 0, 2000, threading.Event(), Mock())
+        self.assertEqual(messages[0]['content'], 'x' * 5000)
+        self.assertEqual(count, 1)
+        self.assertEqual(summary, 'Preserved user request.')
+        self.assertLessEqual(sum(len(m['content']) for m in history), 2000)
+        self.assertGreater(client.ask.call_count, 1)
 
 
 if __name__ == '__main__':

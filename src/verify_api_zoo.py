@@ -170,7 +170,7 @@ def run(output):
             return window
         config = dict(MODEL_CHOICES=DEFAULT_MODELS, DEEPSEEK_API_KEY='deepseek-placeholder', MIRAI_API_KEY='mirai-placeholder')
         catalog = [{'id': 'coding-model', 'vision': False}, {'id': 'vision-model', 'vision': True}]
-        def discover(*_):
+        def discover(*_, **options):
             if delayed_discovery[0] and not discovery_release.wait(3):
                 raise TimeoutError('Synthetic discovery was not released')
             return catalog

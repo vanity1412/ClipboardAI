@@ -113,8 +113,19 @@ class CloudClient(DeepSeekClient):
                         if remaining <= 0:
                             raise TimeoutError()
                         timeout = min(timeout or remaining, remaining)
-                    with BrowserSession(candidate, config.get('BROWSER_AUTH_ROOT'), self.cancel_event) as browser:
-                        answer = browser.ask(selected, request_messages(text, history, instruction), timeout, getattr(self, 'on_stream', None))
+                    import time
+                    started, error = time.monotonic(), None
+                    try:
+                        with BrowserSession(candidate, config.get('BROWSER_AUTH_ROOT'), self.cancel_event,
+                                            deadline=deadline) as browser:
+                            answer = browser.ask(selected, request_messages(text, history, instruction), timeout, getattr(self, 'on_stream', None))
+                    except Exception as exc:
+                        error = exc
+                        raise
+                    finally:
+                        stats = getattr(self, 'activity', None)
+                        if stats is not None:
+                            stats.record(candidate['name'], selected, getattr(self, 'activity_phase', 'Trả lời'), started, error=error)
                     return answer, candidate['name'] + ': ' + selected
                 if candidate['provider'] == 'deepseek' and selected in ('deepseek-flash', 'deepseek-v4-pro'):
                     self.config = dict(config, DEEPSEEK_MODEL=selected, DEEPSEEK_API_KEY=candidate['api_key'],

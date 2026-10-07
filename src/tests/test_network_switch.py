@@ -201,6 +201,9 @@ function Disable-NetAdapter { param([Parameter(ValueFromPipeline=$true)]$InputOb
     $InputObject.AdminStatus=2; $InputObject.Status='Disabled'
 } }
 function Test-ProviderConnection { param($hostName) $global:events.Add('probe'); return ($global:mode -notin @('provider_failure','rollback_failure')) }
+function Read-WifiConnection { param($id) return @{profile='';ssid_hex=''} }
+function Connect-WifiProfile { param($id,$profile) }
+function Disconnect-WifiProfile { param($id) }
 function Start-Sleep { param($Milliseconds) }
 if ($global:mode -eq 'not_ready') { function Test-AdapterReady { param($id) throw 'target_unavailable' } }
 if ($global:mode -eq 'wifi_fallback') {

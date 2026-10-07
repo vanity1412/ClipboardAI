@@ -8,7 +8,7 @@ API Zoo có mẫu OpenAI, **OpenAI Browser/ChatGPT**, Claude, DeepSeek, Grok, Ge
 
 ## Bắt đầu
 
-1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi và chấp nhận UAC để chạy quyền admin; không chạy cùng bản ClipboardAI cũ. EXE tự yêu cầu quyền admin khi mở, nên thao tác chuyển card mạng không cần hỏi UAC lại.
+1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi; không chạy cùng bản ClipboardAI cũ. App chạy bằng quyền người dùng thông thường. Windows chỉ hỏi UAC khi bạn chọn thao tác bật/tắt card mạng.
 2. Chuột phải icon tray → Model / API / cài đặt → API Zoo. API Zoo là nơi thêm API, nhập key, chọn model và cấu hình API dự phòng. EXE không có key sẵn. Với ảnh, chọn model/API có hỗ trợ ảnh.
 3. Chọn mục đích `Hỏi đáp / phân tích` hoặc `Lập trình`; chọn prompt và mức suy luận riêng. Prompt có thể sửa/lưu từ menu.
 4. Copy câu hỏi → F8, hoặc đang xem câu hỏi/code → F4; chờ hoàn tất rồi Ctrl+V.
@@ -49,7 +49,7 @@ Menu **Chụp ảnh** cho chọn vùng/cả cửa sổ, bốn góc nhạt/viền
 
 Trắc nghiệm giữ nhãn A/B/C/D nếu đề có nhãn; nếu không có, đáp án số là thứ tự phương án từ trên xuống (ví dụ `Câu 1: 2` = phương án thứ hai). Điền khuyết trả nội dung cần điền. Đáp án không xác định phải được báo thiếu dữ kiện; độ đúng còn phụ thuộc ảnh/đề/model. Prompt tùy chỉnh có thể thay đổi định dạng.
 
-Chuyển card mạng có thể yêu cầu UAC; menu phân biệt card bật và đã kết nối. Khi mất mạng, mở phần khôi phục mạng trong menu và chọn lại card trong Windows. Các test tự động dùng mô phỏng, không chứng minh hoạt động trên mọi phần cứng.
+Chuyển card mạng yêu cầu UAC nếu app chưa có quyền admin; đọc card/danh sách Wi-Fi không cần nâng quyền. Menu phân biệt card bật và đã kết nối. Nếu chuyển thất bại, app khôi phục trạng thái card và profile/SSID Wi-Fi cũ; nếu không khôi phục được, card mới được giữ bật để còn đường kết nối và app báo kiểm tra thủ công. Khi mất mạng, mở phần khôi phục mạng trong menu và chọn lại card trong Windows. Thoát trong lúc chuyển mạng sẽ yêu cầu hủy và chờ Windows hoàn tất khôi phục; tray còn hoạt động trong thời gian này. Các test tự động dùng mô phỏng, không chứng minh hoạt động trên mọi phần cứng.
 
 ## Build và tải EXE trên GitHub
 
@@ -79,15 +79,31 @@ Nếu EXE cũ đang chạy và bị Windows khóa, build sang thư mục riêng:
 
 Build kiểm tra các tệp Tcl/Tk trước khi đóng gói. Nếu runtime bị thiếu hoặc môi trường build chặn quyền đọc, script dừng với lỗi thay vì tạo EXE thiếu cửa sổ chọn vùng/API Zoo/cài đặt phím. Dùng Python có Tcl/Tk và môi trường cho phép đọc các tệp runtime đó.
 
+EXE được kiểm tra manifest `asInvoker`, không yêu cầu quyền admin khi mở. Helper PowerShell riêng chỉ được nâng quyền cho thao tác mạng; mã helper được khóa chống sửa/thay thế cho tới khi thao tác và khôi phục kết thúc.
+
 Kiểm tra chấp nhận cả tệp Tcl/Tk riêng và Tcl/Tk 9 nhúng dữ liệu trong DLL (`//zipfs:/`), nên không yêu cầu danh sách `data_files` phải khác rỗng trong trường hợp nhúng. Workflow kiểm tra thêm EXE bằng `--verify-tk`: khởi tạo Tk/ttk ẩn, xuất phiên bản và đường dẫn thư viện; không mở tray, gửi API hoặc thay clipboard.
 
 ## Dữ liệu riêng
 
-API key lưu trong `api_zoo.json` (hoặc `.env`/`mirai_config.json`) cạnh EXE, dạng plaintext, không mã hóa. Lịch sử hỏi đáp lưu trong `session.json`, tùy chọn/prompt lưu trong `preferences.json`, cũng dạng plaintext. Khi dùng AI, chữ/ảnh được gửi đến endpoint của API/model đã chọn và API dự phòng nếu bật; không đưa dữ liệu nhạy cảm vào yêu cầu nếu không muốn gửi nhà cung cấp đó.
+API key được bảo vệ bằng Windows DPAPI cho tài khoản và máy hiện tại khi bạn **Lưu** trong API Zoo. File API Zoo cũ chứa key plaintext được chuyển sang dạng bảo vệ ở lần lưu thành công tiếp theo; đọc file không tự sửa cấu hình. Nếu chuyển máy/tài khoản và không giải mã được, giữ bản gốc, đổi tên `api_zoo.json` rồi tạo lại API và nhập key qua API Zoo. Cấu hình cũ trong `.env`/`mirai_config.json` vẫn có thể chứa key dạng plaintext. Lịch sử hỏi đáp trong `session.json` và tùy chọn/prompt trong `preferences.json` vẫn là plaintext. Khi dùng AI, chữ/ảnh được gửi đến endpoint của API/model đã chọn và API dự phòng nếu bật; không đưa dữ liệu nhạy cảm vào yêu cầu nếu không muốn gửi nhà cung cấp đó.
+
+Lưu lịch sử chạy nền theo thứ tự để giao diện tiếp tục phản hồi; file được ghi tạm, đồng bộ xuống đĩa rồi thay thế, và dữ liệu không đổi không bị ghi lại. Khi không ghi được file, đáp án hoàn tất vẫn có thể copy và app báo lỗi lưu; chọn **F6 → Lưu lại lịch sử** sau khi khôi phục quyền ghi/dung lượng. Thoát sẽ chờ lưu xong; nếu lưu thất bại, app giữ mở để bạn lưu lại hoặc copy kết quả.
+
+Giới hạn lịch sử API dùng đúng số ký tự cấu hình trong `SESSION_MAX_CHARS`; câu hỏi hiện tại được trừ khỏi phần dành cho lịch sử. Ảnh lưu theo phiên trong `session-images.sqlite3`, tự khôi phục khi mở lại app. Mở **Quản lý / xem ảnh của phiên…** từ tray hoặc F6 để xem, xóa từng ảnh hoặc toàn bộ ảnh. Giới hạn: 8 ảnh/32 MiB mỗi phiên, cache RAM 64 MiB, dữ liệu ảnh 256 MiB trên đĩa. Ảnh ra khỏi cache RAM có thể nạp lại; ảnh bị loại khỏi kho do giới hạn có cảnh báo để chụp lại. `status.log` xoay vòng khi đạt khoảng 2 MiB và giữ một bản `status.previous.log`; log không chứa câu hỏi, đáp án hay API key.
+
+Để sao lưu, đóng app rồi chép `session.json`, `session-images.sqlite3` và `preferences.json`; giữ chúng cùng thư mục EXE khi phục hồi. Kho ảnh là dữ liệu riêng trên máy, không được mã hóa; chỉ ảnh/chữ cần cho câu hỏi mới được gửi đến API đã chọn. Ảnh từng bị mất khi thoát các bản cũ không thể khôi phục tự động.
 
 Repository chỉ chứa code và cấu hình mẫu trống. `.gitignore` loại key, lịch sử, ảnh, log, EXE và build. Không ép thêm các file riêng bằng `git add -f`. Không đặt key trong source hoặc GitHub Actions; build không cần key.
 
-Đăng nhập OpenAI Browser lưu phiên riêng vào `.clipboardai-auth/<id>` cạnh EXE, đã loại khỏi Git. Không chia sẻ thư mục này. Codex CLI quản lý token và gửi yêu cầu AI; ClipboardAI không nhập cookie hoặc kho đăng nhập Codex đang có.
+Đăng nhập OpenAI Browser dùng kho thông tin xác thực do Codex CLI quản lý, ưu tiên keyring của hệ điều hành khi khả dụng và có thể dùng file dự phòng. Các phiên cũ dùng file vẫn được giữ tương thích trong `.clipboardai-auth/<id>` cạnh EXE, đã loại khỏi Git; không chia sẻ thư mục này. ClipboardAI không nhập cookie hoặc kho đăng nhập Codex đang có.
+
+## Quản lý hội thoại, chẩn đoán và riêng tư
+
+Mở tray → **Hội thoại · Chẩn đoán · Riêng tư…**. Tab Hội thoại tìm trong toàn bộ nội dung, mở phiên, đổi tên, xuất Markdown/JSON và sao lưu ZIP gồm lịch sử + kho ảnh. ZIP không gồm khóa API/đăng nhập; đóng app trước khi khôi phục hai file cạnh EXE. File xuất và ZIP chưa mã hóa.
+
+Tab Chẩn đoán hiển thị provider/model thực dùng, trạng thái lỗi an toàn, proxy hệ thống đã bỏ thông tin đăng nhập, số lần gọi và token provider báo từ lúc mở app. Đếm cả lần thất bại, tóm tắt và dự phòng; giữ 200 dòng gần nhất. Lần không có usage được ghi “không báo”, không ước lượng thành token thật. OpenAI Browser hiện chỉ đếm lần gọi, chưa lấy số token. Nút bỏ khóa tạm cho phép thử provider đã chọn ở lần gửi sau; không tự gửi hay thay đổi key. Proxy hiển thị là cấu hình hệ thống; kết nối vẫn áp dụng quy tắc bỏ qua proxy như trước.
+
+Tab Riêng tư mở phiên trống chỉ trong RAM và mặc định tắt tự copy. Ảnh mới được xem/che bằng kéo chuột trước khi lưu RAM và gửi; có thể bật/tắt che ảnh riêng. Bật riêng tư không xóa lịch sử cũ. Tắt sẽ bỏ phiên riêng tư và trở về lịch sử đã lưu; nút dọn RAM mở phiên riêng tư trống mới. Phiên riêng tư không được khôi phục sau khi thoát; khi mở app lại, lịch sử thường vẫn còn. Xuất nội dung riêng tư ra file cần xác nhận riêng, sao lưu ZIP bị tắt trong chế độ này. App vẫn có thể lưu cấu hình, khóa đăng nhập và log trạng thái không chứa câu hỏi/ảnh. Đây không phải chế độ ẩn danh của Windows hay của nhà cung cấp AI: không bảo đảm xóa vật lý mọi bản sao trong RAM/pagefile, clipboard hoặc dữ liệu đã gửi nhà cung cấp.
 
 ## Cấu trúc
 

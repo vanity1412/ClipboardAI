@@ -38,10 +38,12 @@ def install_payload(package_root, target, progress=lambda _: None):
     target = target / package_id[:16]
     marker = target / "installed.json"
     files = manifest["files"]
-    if marker.exists() and all(child_path(target, item["path"]).exists() and
-                               child_path(target, item["path"]).stat().st_size == item["size"] for item in files):
+    if marker.exists() and _verified_cache(marker, target, files, package_id):
         return target
     target.mkdir(parents=True, exist_ok=True)
+    # An interrupted repair must not retain a marker claiming it completed.
+    if marker.exists():
+        marker.unlink()
     needed = sum(item["size"] for item in files) + 256 * 1024 * 1024
     if shutil.disk_usage(target).free < needed:
         raise RuntimeError("Not enough disk space for bundled Ollama runtime and model")
@@ -67,6 +69,26 @@ def install_payload(package_root, target, progress=lambda _: None):
         temporary.replace(destination)
     marker.write_text(json.dumps({"package_id": package_id}), encoding="utf-8")
     return target
+
+
+def _verified_cache(marker, target, files, package_id):
+    """Size alone cannot establish the integrity of cached executable bytes."""
+    try:
+        if json.loads(marker.read_text(encoding='utf-8')).get('package_id') != package_id:
+            return False
+        for item in files:
+            path = child_path(target, item['path'])
+            if not path.is_file() or path.stat().st_size != item['size']:
+                return False
+            digest = hashlib.sha256()
+            with path.open('rb') as cached:
+                while chunk := cached.read(8 * 1024 * 1024):
+                    digest.update(chunk)
+            if digest.hexdigest() != item['sha256']:
+                return False
+        return True
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 def prepare_server(package_root):

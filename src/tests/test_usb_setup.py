@@ -37,6 +37,28 @@ class PayloadTests(unittest.TestCase):
                 install_payload(root, root / 'installed')
             self.assertEqual(list((root / 'installed').rglob('installed.json')), [])
 
+    def test_same_size_cached_corruption_is_repaired_before_runtime_use(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.package(root)
+            result = install_payload(root, root / 'installed')
+            cached = result / 'models/blobs/test'
+            cached.write_bytes(b'corruptbyte')
+            self.assertEqual(cached.stat().st_size, 11)
+            self.assertEqual(install_payload(root, root / 'installed'), result)
+            self.assertEqual(cached.read_bytes(), b'firstsecond')
+
+    def test_failed_cache_repair_does_not_keep_completed_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.package(root)
+            result = install_payload(root, root / 'installed')
+            (result / 'models/blobs/test').write_bytes(b'corruptbyte')
+            (root / 'payload/part2').write_bytes(b'broken')
+            with self.assertRaises(RuntimeError):
+                install_payload(root, root / 'installed')
+            self.assertFalse((result / 'installed.json').exists())
+
     def test_cannot_write_outside_package_root(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ValueError):

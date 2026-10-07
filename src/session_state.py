@@ -1,5 +1,8 @@
 """Portable conversation state, shared by the native control panel and worker."""
 import json
+import os
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,7 +48,8 @@ def format_session_time(value):
 
 class Session:
     def __init__(self, path):
-        self.path = Path(path)
+        self.private = path is None
+        self.path = Path(path) if path is not None else None
         self.messages = []
         self.mode = CHAT
         self.auto_copy = True
@@ -67,9 +71,17 @@ class Session:
         self.active_id = uuid4().hex
         self.updated_at = ""
         self._sessions = {}
+        self._saved_active_id = None
+        self._saved_file_state = None
+        self._current_format = False
+        self._save_lock = threading.RLock()
+        self._save_sequence = 0
+        self._writer = None
+        self._pending_saves = []
+        self._queued_save = None
         self.needs_chat_start = False
         try:
-            if self.path.exists():
+            if self.path is not None and self.path.exists():
                 data = json.loads(self.path.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and "sessions" in data:
                     records = data["sessions"]
@@ -100,6 +112,9 @@ class Session:
                             record['auto_copy'] = True
                 self._load(active)
                 self.active_id, self._sessions = active_id, validated
+                self._saved_active_id = active_id
+                self._saved_file_state = self._disk_signature()
+                self._current_format = data.get('version') == 5 and 'sessions' in data
                 self.needs_chat_start = data.get('version', 0) in (0, 1, 2) and self.mode == 0
         except (OSError, ValueError, TypeError, OverflowError, RecursionError):
             self._load_failed = True
@@ -113,6 +128,7 @@ class Session:
         if not isinstance(messages, list) or not all(isinstance(m, dict) and m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str) for m in messages):
             raise ValueError("Invalid history")
         values = {name: data.get(name, default) for name, default in (
+            ("title", ""),
             ("problem", ""), ("last_answer", ""), ("last_request", ""),
             ("last_action", "problem"), ("capture_text", ""), ("capture_source", ""))}
         if not all(isinstance(value, str) for value in values.values()):
@@ -167,7 +183,7 @@ class Session:
             setattr(self, name, deepcopy(value))
 
     def _snapshot(self):
-        return dict(messages=self.messages, problem=self.problem, last_answer=self.last_answer,
+        return dict(title=getattr(self, 'title', ''), messages=self.messages, problem=self.problem, last_answer=self.last_answer,
                     last_request=self.last_request, last_action=self.last_action,
                     last_request_state=self.last_request_state,
                     mode=self.mode, auto_copy=self.auto_copy, capture_text=self.capture_text,
@@ -176,29 +192,116 @@ class Session:
                     capture_source=self.capture_source, capture_pages=self.capture_pages,
                     capture_missing=self.capture_missing, updated_at=self.updated_at)
 
-    def save(self):
+    def _prepare_save(self):
+        """Freeze a validated snapshot; the writer never reads live messages."""
+        if self.private:
+            self._sessions[self.active_id] = deepcopy(self._validate(self._snapshot()))
+            return True
+        if self._load_failed:
+            return None
+        record = self._validate(self._snapshot())
+        queued = self._queued_save
+        if queued and queued[0] == self.active_id and queued[1] == record and not queued[2].done():
+            return queued[2]
+        if ((not queued or queued[2].done()) and self._current_format and self.active_id == self._saved_active_id
+                and record == self._sessions.get(self.active_id)
+                and self._disk_signature() == self._saved_file_state and self._saved_file_state is not None):
+            self.error = ''
+            return True
+        if record != self._sessions.get(self.active_id):
+            self.updated_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+            record['updated_at'] = self.updated_at
+        records = dict(self._sessions)
+        records[self.active_id] = record
+        self._save_sequence += 1
+        return self.active_id, record, records, self._save_sequence
+
+    def _disk_signature(self):
         try:
-            # Corrupt input stays protected. Transient write failures may retry
-            # with the in-memory answer once the storage becomes writable.
-            if self._load_failed:
-                return False
-            record = self._validate(self._snapshot())
-            if record != self._sessions.get(self.active_id):
-                self.updated_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-                record["updated_at"] = self.updated_at
-            records = dict(self._sessions)
-            records[self.active_id] = record
+            stat = self.path.stat()
+            return stat.st_size, stat.st_mtime_ns
+        except FileNotFoundError:
+            return None
+
+    def _write_archive(self, ident, record, records, sequence):
+        try:
             temporary = self.path.with_suffix(".tmp")
             # Keep the active fields for compatibility with existing utilities.
-            temporary.write_text(json.dumps(dict(record, version=5, active_id=self.active_id,
-                sessions=[dict(value, id=ident) for ident, value in records.items()]), ensure_ascii=False), encoding="utf-8")
+            data = dict(record, version=5, active_id=ident,
+                sessions=[dict(value, id=session_id) for session_id, value in records.items()])
+            with temporary.open('w', encoding='utf-8') as output:
+                json.dump(data, output, ensure_ascii=False, separators=(',', ':'))
+                output.flush()
+                os.fsync(output.fileno())
             temporary.replace(self.path)
-            self._sessions = records
-            self.error = ""
+            with self._save_lock:
+                self._sessions = records
+                self._saved_active_id = ident
+                self._saved_file_state = self._disk_signature()
+                self._current_format = True
+                if sequence == self._save_sequence:
+                    self.error = ""
             return True
+        except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+            with self._save_lock:
+                if sequence == self._save_sequence:
+                    self.error = "Chưa lưu được lịch sử; kết quả chỉ ở bộ nhớ. Kiểm tra ổ đĩa/quyền ghi, đừng thoát app."
+            return False
+
+    def flush(self):
+        """Wait for ordered background writes and report any failure."""
+        with self._save_lock:
+            pending, self._pending_saves = self._pending_saves, []
+        results = [future.result() for future in pending]
+        return all(results)
+
+    def close(self):
+        # A failed background write may be recoverable by the time the user
+        # exits. Retry the current snapshot before releasing the writer.
+        saved = self.save()
+        if self._writer is not None:
+            self._writer.shutdown(wait=True)
+            self._writer = None
+        return saved
+
+    def save(self):
+        # Session switching/deletion cannot outrun pending writes. A prior
+        # failure must retry the current snapshot before any transition.
+        self.flush()
+        try:
+            with self._save_lock:
+                prepared = self._prepare_save()
+            if prepared is None or prepared is True:
+                return bool(prepared)
+            if isinstance(prepared, Future):
+                return prepared.result()
+            return self._write_archive(*prepared)
         except (OSError, ValueError, TypeError, OverflowError, RecursionError):
             self.error = "Chưa lưu được lịch sử; kết quả chỉ ở bộ nhớ. Kiểm tra ổ đĩa/quyền ghi, đừng thoát app."
             return False
+
+    def save_async(self):
+        """Return a Future[bool]; success means replace and fsync completed."""
+        try:
+            with self._save_lock:
+                prepared = self._prepare_save()
+                if isinstance(prepared, Future):
+                    return prepared
+                if isinstance(prepared, tuple):
+                    if self._writer is None:
+                        self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix='session-save')
+                    future = self._writer.submit(self._write_archive, *prepared)
+                    self._pending_saves.append(future)
+                    self._queued_save = (prepared[0], prepared[1], future)
+                    return future
+                future = Future()
+                future.set_result(bool(prepared))
+                return future
+        except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+            self.error = "Chưa lưu được lịch sử; kết quả chỉ ở bộ nhớ. Kiểm tra ổ đĩa/quyền ghi, đừng thoát app."
+            future = Future()
+            future.set_result(False)
+            return future
 
     def new_problem(self, problem="", mode=None):
         if not self.save():
@@ -237,22 +340,28 @@ class Session:
             text = record["problem"] or record["capture_text"] or record["last_request"]
             if not text and not record["messages"] and not record["last_answer"]:
                 continue
-            title = next((line.strip() for line in text.splitlines() if line.strip()), "Bài chưa có tên")
+            title = record.get('title') or next((line.strip() for line in text.splitlines() if line.strip()), "Bài chưa có tên")
             title = title if len(title) <= 72 else title[:69] + "…"
             entries.append(dict(id=ident, title=title, updated_at=record["updated_at"]))
         return sorted(entries, key=lambda entry: session_time_key(entry["updated_at"]), reverse=True)
 
     def reset(self):
+        if not self._load_failed and not self.save():
+            return False
+        previous_id, previous_records = self.active_id, dict(self._sessions)
+        previous = deepcopy(self._snapshot())
+        previous_load_failed = self._load_failed
         self._sessions.pop(self.active_id, None)
         self.active_id = uuid4().hex
         self.updated_at = ""
         self.messages, self.problem, self.last_answer = [], "", ""
+        self.title = ''
         self.summary, self.summary_count = "", 0
         self.last_request = ""
         self.last_action = "problem"
         self.last_request_state = "pending"
         self.clear_capture(save=False)
-        if self._load_failed and self.path.exists():
+        if self._load_failed and self.path is not None and self.path.exists():
             try:
                 backup = self.path.with_suffix(".unreadable.json")
                 number = 1
@@ -261,10 +370,43 @@ class Session:
                     number += 1
                 self.path.replace(backup)
             except OSError:
-                return
+                self._sessions, self.active_id = previous_records, previous_id
+                self._load(previous)
+                return False
         self.error = ""
         self._load_failed = False
-        return self.save()
+        if self.save():
+            return True
+        self._sessions, self.active_id = previous_records, previous_id
+        self._load(previous)
+        self._load_failed = previous_load_failed
+        return False
+
+    def rename(self, ident, title):
+        title = title.strip()
+        if not title or len(title) > 120:
+            raise ValueError('Tên hội thoại phải có 1–120 ký tự')
+        title.encode('utf-8')
+        if not self.save() or ident not in self._sessions:
+            return False
+        previous = deepcopy(self._sessions[ident])
+        self._sessions[ident]['title'] = title
+        self._current_format = False
+        if ident == self.active_id:
+            self.title = title
+        if self.save():
+            return True
+        self._sessions[ident] = previous
+        if ident == self.active_id:
+            self.title = previous.get('title', '')
+        return False
+
+    def archive_snapshot(self):
+        with self._save_lock:
+            records = deepcopy(self._sessions)
+            records[self.active_id] = deepcopy(self._validate(self._snapshot()))
+            return dict(version=5, active_id=self.active_id,
+                        sessions=[dict(record, id=ident) for ident, record in records.items()])
 
     def clear_capture(self, save=True):
         self.capture_text, self.capture_source = "", ""
@@ -290,7 +432,7 @@ class Session:
             picked.insert(0, dict(self.messages[0]))
         return picked
 
-    def commit(self, turns, answer, problem=None):
+    def commit(self, turns, answer, problem=None, asynchronous=False):
         self.messages.extend(turns)
         if not self.history_full and len(self.messages) > 20:
             self.messages = [self.messages[0]] + self.messages[-19:]
@@ -299,7 +441,10 @@ class Session:
             self.problem = problem
         self.last_answer = answer
         self.last_request_state = 'completed'
-        return self.save()
+        return self.save_async() if asynchronous else self.save()
+
+    def commit_async(self, turns, answer, problem=None):
+        return self.commit(turns, answer, problem, asynchronous=True)
 
     def set_mode(self, mode):
         mode = normalize_mode(mode)

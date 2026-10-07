@@ -58,6 +58,7 @@ class RequestDisplay:
     notice: str = ''
     feedback: str = ''
     shortcut_names: dict = field(default_factory=dict)
+    status: str = ''
 
     def hint(self, text):
         return re.sub(r'Shift\+F(?:10|9|8)|F(?:10|9|8|7|6|4|3)\b',
@@ -101,13 +102,14 @@ class RequestDisplay:
         unknown, _ = self.answer_details()
         hint = self.hint('Shift+F8 để copy') if self.copy in ('changed', 'error', 'manual') else ''
         return answer_pages(self.header(), self._all_answer_rows, unknown,
-                            self._uncertain_reason, hint, measure, width)
+                            self._uncertain_reason, hint, measure, width, notice=self.notice)
 
     def begin(self, started=None, image=False):
         self.phase, self.started = 'running', started
         self.stage = 'Đang chụp ảnh' if image else 'Đang chuẩn bị gửi AI'
         self.duration, self.answer, self.error, self.notice = 0, '', '', ''
         self.feedback = ''
+        self.status = ''
         self.copy, self.image = 'manual', image
 
     def begin_model(self, started):
@@ -122,11 +124,14 @@ class RequestDisplay:
         self.phase, self.duration, self.answer, self.error, self.copy = phase, duration, answer, error, copy
         self.notice = ''
         self.feedback = ''
+        self.status = ''
 
     def header(self, now=None):
         feedback = self.feedback
         if feedback:
             return self.hint(feedback)
+        if self.status:
+            return self.hint(self.status)
         seconds = self.seconds(now)
         if self.phase == 'running':
             return f'{self.stage} · {seconds}s' if self.started is not None else self.stage
@@ -155,7 +160,7 @@ class RequestDisplay:
                            ('…' if len(unknown) > 3 else ''))
                 if self._uncertain_reason:
                     warning += ' · ' + self._uncertain_reason
-            room = 4 - bool(warning)
+            room = 4 - bool(warning) - bool(self.notice)
             hint = ('Shift+F8 để copy' if self.copy in ('changed', 'error', 'manual') else
                     'F9 chữ / Shift+F9 ảnh' if unknown and not answer_rows else '')
             if hint:
@@ -165,6 +170,8 @@ class RequestDisplay:
                 rows[-1] += ' …'
             if warning:
                 rows.append(warning)
+            if self.notice:
+                rows.append(self.notice)
             if hint:
                 rows.append(self.hint(hint))
         elif self.phase == 'running':

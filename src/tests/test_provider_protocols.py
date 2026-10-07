@@ -90,20 +90,17 @@ class ProviderTests(unittest.TestCase):
 
     def test_anthropic_discovery_uses_version_header_and_paginates(self):
         pages = [{'data': [{'id': 'a'}], 'has_more': True, 'last_id': 'a'}, {'data': [{'id': 'b'}], 'has_more': False}]
-        with patch('urllib.request.build_opener') as opener:
-            response = opener.return_value.open.return_value.__enter__.return_value
-            response.read.side_effect = [json.dumps(page).encode() for page in pages]
+        with patch('http_transport.request_json', side_effect=[(page, len(json.dumps(page).encode())) for page in pages]) as request:
             self.assertEqual([m['id'] for m in discover_models(profile())], ['a', 'b'])
-            calls = opener.return_value.open.call_args_list
-            req = calls[0].args[0]
-            self.assertEqual(req.get_header('X-api-key'), 'synthetic-key')
-            self.assertEqual(req.get_header('Anthropic-version'), '2023-06-01')
-            self.assertIsNone(req.get_header('Authorization'))
-            self.assertTrue(calls[1].args[0].full_url.endswith('?after_id=a'))
+            calls = request.call_args_list
+            headers = calls[0].kwargs['headers']
+            self.assertEqual(headers['x-api-key'], 'synthetic-key')
+            self.assertEqual(headers['anthropic-version'], '2023-06-01')
+            self.assertNotIn('Authorization', headers)
+            self.assertTrue(calls[1].args[0].endswith('?after_id=a'))
 
     def test_discovery_repeated_page_is_rejected(self):
-        with patch('urllib.request.build_opener') as opener:
-            opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps({'data': [], 'has_more': True, 'last_id': 'a'}).encode()
+        with patch('http_transport.request_json', return_value=({'data': [], 'has_more': True, 'last_id': 'a'}, 60)):
             with self.assertRaises(ValueError):
                 discover_models(profile())
 

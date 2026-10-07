@@ -70,9 +70,11 @@ Danh sách API, model, card mạng và Wi-Fi phụ thuộc cấu hình và máy.
 
 ## Hội thoại và mạng
 
-F6 có **Hội thoại mới từ clipboard** và **Tạo phiên trống**. Mỗi phiên có **Chọn phiên**, **Mở chat**, **Gửi lại yêu cầu**, **Copy câu trả lời**, **Xóa ảnh đã thu thập**, **Lưu lại lịch sử**, **Xóa phiên**. Danh sách hiển thị tên và thời điểm cập nhật phiên.
+F6 có **Hội thoại mới từ clipboard** và **Tạo phiên trống**. Mỗi phiên có **Chọn phiên**, **Mở chat**, **Gửi lại yêu cầu**, **Copy câu trả lời**, **Xóa ảnh đã thu thập**, **Lưu lại lịch sử**, **Xóa phiên**, **Quản lý / xem ảnh…**. Danh sách hiển thị tên và thời điểm cập nhật phiên. Menu tray cũng có quản lý ảnh của phiên hiện tại.
 
-Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã lưu/chưa lưu và trạng thái kết nối. Có **Làm mới danh sách** và **Thiết lập trong Windows**. Mạng chưa lưu chuyển sang Windows để nhập mật khẩu. EXE yêu cầu quyền admin khi khởi động; chọn card có thể tắt các card Wi-Fi/LAN khác và không cần hỏi UAC lại. Khi chạy source bằng Python không có quyền admin, thao tác chuyển card vẫn yêu cầu UAC. Có mục mở card mạng để khôi phục thủ công.
+Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã lưu/chưa lưu và trạng thái kết nối. Có **Làm mới danh sách** và **Thiết lập trong Windows**. Mạng chưa lưu chuyển sang Windows để nhập mật khẩu. EXE chạy bằng quyền người dùng thông thường; Windows chỉ hỏi UAC khi cần bật/tắt card mạng. Chọn card có thể tắt các card Wi-Fi/LAN khác. Đọc danh sách không nâng quyền. Có mục mở card mạng để khôi phục thủ công.
+
+Nếu chuyển mạng lỗi, app khôi phục trạng thái bật/tắt và profile/SSID của các card Wi-Fi trước đó; Wi-Fi vốn chưa kết nối được đưa lại về trạng thái chưa kết nối. Nếu khôi phục không thành công, app giữ card mới bật và báo kiểm tra thủ công. Thoát trong lúc chuyển mạng gửi yêu cầu hủy và chờ khôi phục xong; tray tiếp tục hiện trạng thái để thao tác Windows không bị bỏ dở. Kiểm tra kết nối dùng HTTPS và proxy của người dùng, không gửi API key.
 
 ## Các cửa sổ mở chủ động
 
@@ -102,7 +104,13 @@ Trắc nghiệm giữ nhãn của đề. Nếu đề không có nhãn, số đá
 
 Ô rê chuột hiện đáp án gọn, câu chưa xác định và lỗi. Nhiều đáp án được chia cột/trang, tự chuyển trang sau khoảng **5 giây khi đang rê chuột**. Clipboard giữ nội dung câu trả lời đầy đủ.
 
-Lịch sử chữ lưu trong `session.json`. Ảnh của các phiên được giữ trong bộ nhớ với giới hạn dung lượng; không được lưu vào lịch sử trên đĩa để khôi phục sau khi thoát app. Sau khi mở lại app, cần chụp/bổ sung lại ảnh nếu câu hỏi tiếp cần xem ảnh cũ; nhãn ảnh trong lịch sử chữ không chứa dữ liệu ảnh.
+Lịch sử chữ lưu trong `session.json`. Việc ghi file chạy nền theo thứ tự, đồng bộ xuống đĩa rồi thay thế file đích; dữ liệu không đổi không bị ghi lại. Nếu lưu thất bại, app giữ đáp án hoàn tất để copy và báo lỗi. Dùng **F6 → Lưu lại lịch sử** khi thư mục có thể ghi lại. Thoát chờ lưu xong; nếu chưa lưu được, app giữ mở để tránh mất kết quả.
+
+Giới hạn lịch sử API dùng đúng số ký tự đặt trong cài đặt/`SESSION_MAX_CHARS`, trừ phần câu hỏi hiện tại trước khi lấy hoặc rút gọn lịch sử. Giới hạn này không phải số token của nhà cung cấp và không xóa lịch sử đã lưu trên đĩa. `status.log` xoay vòng ở khoảng 2 MiB, giữ một bản trước trong `status.previous.log`; log không ghi câu hỏi, đáp án hoặc API key.
+
+Ảnh lưu riêng theo phiên trong `session-images.sqlite3`, bằng transaction SQLite và đồng bộ xuống đĩa trước khi gửi AI. Mở lại app hoặc chuyển phiên tự nạp lại đúng ảnh. Kho ảnh giữ tối đa 8 ảnh/32 MiB mỗi phiên và 256 MiB dữ liệu ảnh tổng; cache RAM tối đa 64 MiB. Cache có thể nạp lại từ đĩa. Nếu kho đầy, ảnh ở các phiên cũ bị loại và thông báo số ảnh thiếu được giữ qua restart; câu hỏi tiếp có thông tin thiếu ảnh để model không suy đoán.
+
+**Quản lý / xem ảnh…** có xem trước, xóa ảnh đang chọn và xóa tất cả ảnh của phiên; xóa cần xác nhận, không xóa lịch sử chữ. Đóng cửa sổ quản lý trước khi gửi/chụp câu hỏi mới. Kho ảnh hỏng hoặc không ghi được sẽ báo lỗi và giữ file cũ, không tự ghi đè. Đóng app rồi sao lưu `session.json`, `session-images.sqlite3` và `preferences.json` cùng nhau. Kho ảnh không mã hóa; `.gitignore` loại database và file journal khỏi source.
 
 ## Mã nguồn theo chức năng
 
@@ -116,6 +124,7 @@ Lịch sử chữ lưu trong `session.json`. Ảnh của các phiên được gi
 | `api_zoo.py`, `api_zoo_ui.py` | Quản lý API, lấy model, chọn API/model và chuyển API khi lỗi |
 | `provider_catalog.py`, `provider_protocols.py`, `browser_provider.py` | Mẫu/gợi ý model, Anthropic/Responses, đăng nhập ChatGPT qua Codex app-server |
 | `cloud_client.py`, `deepseek_client.py` | Gửi chữ/ảnh tới API và kiểm tra phản hồi hoàn chỉnh |
+| `http_transport.py`, `credential_storage.py` | Kết nối HTTP/streaming có proxy, timeout/hủy và bảo vệ key API Zoo bằng Windows DPAPI |
 | `chat_modes.py`, `coding_prompt.py`, `prompt_profiles.py`, `prompt_editor.py` | Mục đích trả lời, suy luận và prompt theo chế độ |
 | `answer_policy.py`, `compact_preview.py`, `hover_layout.py`, `request_display.py` | Chính sách đáp án, trạng thái, bản xem gọn và chuyển trang khi rê chuột |
 | `network_switch.py`, `wifi_networks.py` | Card mạng, SSID, kết nối và khôi phục mạng |
@@ -125,3 +134,14 @@ Lịch sử chữ lưu trong `session.json`. Ảnh của các phiên được gi
 Build bản chính: `./build.ps1`. Build đúng tên bản thử: `./build.ps1 -Name ClipboardAI_Region_Test`. Kết quả nằm trong `dist` cùng README, tài liệu này, cấu hình mẫu trống và SHA256. Repo chứa toàn bộ mã công khai, test và workflow build; không chứa API key, lịch sử cá nhân hoặc EXE build cục bộ.
 
 Chi tiết provider, giao thức custom và đăng nhập: [API_PROVIDERS.md](API_PROVIDERS.md). F7 đã bỏ; mở chat từ tray. Các provider API dùng key; riêng OpenAI Browser có luồng đăng nhập ChatGPT tích hợp qua Codex CLI chính thức.
+# Nâng cấp quản lý và riêng tư
+
+Tray → **Hội thoại · Chẩn đoán · Riêng tư…**:
+
+- Hội thoại: tìm toàn bộ nội dung, đổi tên, mở phiên, xuất MD/JSON, sao lưu ZIP gồm lịch sử và ảnh (không gồm key). Đóng app trước khi giải nén hai file dữ liệu cạnh EXE để khôi phục.
+- Chẩn đoán: provider/model thực dùng, lỗi theo mã an toàn, proxy không chứa mật khẩu; đếm lần gọi gồm tóm tắt, lỗi và dự phòng; token chỉ cộng khi provider báo đủ. Thống kê trong RAM từ lúc mở app, tối đa 200 dòng; OpenAI Browser chưa báo token.
+- Riêng tư: mở phiên mới chỉ RAM, mặc định không tự copy; tắt/dọn sẽ bỏ phiên RAM. Không xóa lịch sử cũ. Khi khởi động lại, app mở lịch sử thường.
+- Che ảnh: kéo vùng đen trước khi gửi; chỉ bản đã che được lưu/gửi. Đóng cửa sổ hoặc Hủy gửi sẽ hủy yêu cầu.
+- Quản lý ảnh ghi số trang trong danh sách ảnh đang giữ, cho xem trước và xóa; cảnh báo ảnh bị loại vẫn giữ.
+
+Nội dung xuất và ZIP chưa mã hóa. Riêng tư không xóa clipboard, lịch sử cũ, thông tin đăng nhập hoặc dữ liệu đã gửi AI; dọn bộ nhớ của app không bảo đảm xóa vật lý mọi bản sao RAM/pagefile.

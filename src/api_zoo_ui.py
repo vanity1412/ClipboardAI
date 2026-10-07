@@ -41,8 +41,22 @@ def catalog_result(event, pending_token, selected_id, choices, edited_choices=()
 
 def open_editor(root_path, config, results):
     import tkinter as tk
+    window = None
+    try:
+        window = tk.Tk()
+        _open_editor(window, root_path, config, results)
+    finally:
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+        results.put(('zoo_closed',))
+
+
+def _open_editor(window, root_path, config, results):
+    import tkinter as tk
     from tkinter import ttk, messagebox
-    window = tk.Tk()
     window.title('API Zoo')
     window.geometry('740x580')
     window.minsize(650, 570)
@@ -51,15 +65,16 @@ def open_editor(root_path, config, results):
     try:
         data = ZooStore(root_path).load()
     except (OSError, ValueError, TypeError):
-        messagebox.showerror('API Zoo', 'File cấu hình lỗi; file cũ được giữ nguyên.', parent=window)
+        messagebox.showerror('API Zoo', 'Không đọc/giải mã được cấu hình. Khôi phục bản sao bằng đúng tài khoản Windows, hoặc đổi tên api_zoo.json rồi thêm API lại. File cũ được giữ nguyên.', parent=window)
         window.destroy()
-        results.put(('zoo_closed',))
         return
     if not data['profiles'] and not ZooStore(root_path).path.exists():
         data = seed_profiles(config)
     data = copy.deepcopy(data)
     selected, pending, timer, loading = [None], [0], [None], [False]
     credential_host, operation_cancel = [None], [None]
+    worker, waiting, closed, poll_timer = [None], [None], [False], [None]
+    deferred_edits = set()
     browser_ready = set()
     frame = ttk.Frame(window, padding=12)
     frame.pack(fill='both', expand=True)
@@ -71,12 +86,12 @@ def open_editor(root_path, config, results):
     tree.pack(fill='x')
     form = ttk.Frame(frame)
     form.pack(fill='x', pady=10)
-    preset = tk.StringVar(value='Custom · OpenAI-compatible')
+    preset = tk.StringVar(master=window, value='Custom · OpenAI-compatible')
     protocol = ['compatible']
     ttk.Label(form, text='Nhà cung cấp').grid(row=0, column=0, sticky='w')
     providers = ttk.Combobox(form, name='provider', textvariable=preset, state='readonly', values=list(PRESETS))
     providers.grid(row=0, column=1, sticky='ew', padx=(10, 0), pady=3)
-    fields = {field: tk.StringVar() for field in ('name', 'base_url', 'api_key')}
+    fields = {field: tk.StringVar(master=window) for field in ('name', 'base_url', 'api_key')}
     entries = {}
     for row, (field, label) in enumerate((('name', 'Tên'), ('base_url', 'Endpoint'), ('api_key', 'API key')), 1):
         ttk.Label(form, text=label).grid(row=row, column=0, sticky='w', pady=3)
@@ -84,7 +99,7 @@ def open_editor(root_path, config, results):
         entry.grid(row=row, column=1, sticky='ew', padx=(10, 0), pady=3)
         entries[field] = entry
     form.columnconfigure(1, weight=1)
-    model, vision = tk.StringVar(), tk.StringVar()
+    model, vision = tk.StringVar(master=window), tk.StringVar(master=window)
     edited_choices, updating_choices = set(), [False]
     def choice_changed(field):
         if not updating_choices[0]:
@@ -100,9 +115,9 @@ def open_editor(root_path, config, results):
     ttk.Label(frame, text='Chọn gợi ý hoặc nhập ID model. Để trống model đọc ảnh nếu API chỉ hỗ trợ chữ.', wraplength=690).pack(anchor='w')
     auth_bar = ttk.Frame(frame)
     auth_bar.pack(fill='x', pady=8)
-    auto = tk.BooleanVar(value=data['auto'])
+    auto = tk.BooleanVar(master=window, value=data['auto'])
     ttk.Checkbutton(frame, text='Tự chuyển API khi lỗi', variable=auto).pack(anchor='w')
-    status = tk.StringVar(value='Chọn nhà cung cấp để điền endpoint và gợi ý model.')
+    status = tk.StringVar(master=window, value='Chọn nhà cung cấp để điền endpoint và gợi ý model.')
     ttk.Label(frame, textvariable=status, wraplength=690).pack(anchor='w', pady=8)
     bar = ttk.Frame(frame)
     bar.pack(fill='x', side='bottom')
@@ -114,8 +129,18 @@ def open_editor(root_path, config, results):
             operation_cancel[0].set()
             operation_cancel[0] = None
         if timer[0]:
-            window.after_cancel(timer[0])
+            try:
+                window.after_cancel(timer[0])
+            except tk.TclError:
+                pass
             timer[0] = None
+        waiting[0] = None
+        for ident in tuple(deferred_edits):
+            try:
+                window.after_cancel(ident)
+            except tk.TclError:
+                pass
+        deferred_edits.clear()
 
     def redraw():
         tree.delete(*tree.get_children())
@@ -212,6 +237,13 @@ def open_editor(root_path, config, results):
         operation_cancel[0] = cancel
         loading[0] = True
         status.set('Hoàn tất đăng nhập trong trình duyệt (tối đa 5 phút); có thể bấm Hủy.' if operation == 'login' else 'Đang kiểm tra phiên/lấy model…')
+        if worker[0] is not None and worker[0].is_alive():
+            waiting[0] = (p, token, cancel, operation)
+            status.set('Đang hủy thao tác trước; sẽ kiểm tra cấu hình mới ngay sau đó…')
+        else:
+            launch(p, token, cancel, operation)
+
+    def launch(p, token, cancel, operation):
         def run():
             try:
                 if operation in ('login', 'logout'):
@@ -222,7 +254,7 @@ def open_editor(root_path, config, results):
                             return
                         catalog = session.login()
                 else:
-                    catalog = discover_models(p, auth_root) if p['provider'] == 'codex' else discover_models(p)
+                    catalog = discover_models(p, auth_root, cancel=cancel)
                 local.put(('models', token, p, catalog))
             except InterruptedError:
                 local.put(('error', token, 'Đã hủy đăng nhập/thao tác.'))
@@ -230,7 +262,8 @@ def open_editor(root_path, config, results):
                 code = getattr(exc, 'code', getattr(exc, 'status', None))
                 message = str(exc) if isinstance(exc, RuntimeError) and p['provider'] == 'codex' else ('Không lấy được model' + (f' (HTTP {code}).' if isinstance(code, int) else '; kiểm tra endpoint/key hoặc nhập ID model thủ công.'))
                 local.put(('error', token, message))
-        threading.Thread(target=run, daemon=True).start()
+        worker[0] = threading.Thread(target=run, daemon=True)
+        worker[0].start()
 
     def fetch():
         if timer[0]:
@@ -268,10 +301,21 @@ def open_editor(root_path, config, results):
         chooser['values'] = []
         image_chooser['values'] = []
         timer[0] = window.after(900, fetch)
+
+    def queue_edit():
+        if closed[0]:
+            return
+        ident = [None]
+        def apply():
+            deferred_edits.discard(ident[0])
+            if not closed[0]:
+                edited()
+        ident[0] = window.after(20, apply)
+        deferred_edits.add(ident[0])
     for field in ('base_url', 'api_key'):
         entries[field].bind('<KeyRelease>', edited)
-        entries[field].bind('<<Paste>>', lambda event: window.after(20, edited))
-        entries[field].bind('<FocusOut>', lambda event: window.after(20, edited) if not model.get() else None)
+        entries[field].bind('<<Paste>>', lambda event: queue_edit())
+        entries[field].bind('<FocusOut>', lambda event: queue_edit() if not model.get() else None)
 
     def delete():
         if selected[0] is None:
@@ -323,6 +367,13 @@ def open_editor(root_path, config, results):
     tree.bind('<<TreeviewSelect>>', pick)
 
     def poll():
+        if closed[0]:
+            return
+        if worker[0] is not None and not worker[0].is_alive():
+            worker[0] = None
+            next_operation, waiting[0] = waiting[0], None
+            if next_operation and next_operation[1] == pending[0] and not next_operation[2].is_set():
+                launch(*next_operation)
         try:
             while True:
                 event = local.get_nowait()
@@ -358,7 +409,16 @@ def open_editor(root_path, config, results):
                     status.set(event[1])
         except queue.Empty:
             pass
-        window.after(150, poll)
+        poll_timer[0] = window.after(150, poll)
+
+    def close():
+        closed[0] = True
+        invalidate()
+        if poll_timer[0]:
+            window.after_cancel(poll_timer[0])
+            poll_timer[0] = None
+        window.destroy()
+    window.protocol('WM_DELETE_WINDOW', close)
     redraw()
     if data['profiles']:
         tree.selection_set(data['primary'] or data['profiles'][0]['id'])
@@ -371,5 +431,11 @@ def open_editor(root_path, config, results):
     try:
         window.mainloop()
     finally:
+        closed[0] = True
         invalidate()
-        results.put(('zoo_closed',))
+        if poll_timer[0]:
+            try:
+                window.after_cancel(poll_timer[0])
+            except tk.TclError:
+                window.tk.call('after', 'cancel', poll_timer[0])
+            poll_timer[0] = None

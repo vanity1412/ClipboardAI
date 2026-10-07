@@ -30,6 +30,30 @@ class SecretPolicyTests(unittest.TestCase):
             with self.subTest(text=text.split('=')[0]):
                 self.assertTrue(contains_secret(text))
 
+    def test_provider_prefixed_env_keys_and_common_token_prefixes_are_blocked(self):
+        for text in ('DEEPSEEK_API_KEY=aB19xZaB19xZaB19xZaB19xZ',
+                     'ANTHROPIC_API_KEY="aB19xZaB19xZaB19xZ"',
+                     'AWS_SECRET_ACCESS_KEY=aB19xZaB19xZaB19xZaB19xZ',
+                     'DB_PASSWORD="MyLongP@ss2026"',
+                     'GOOGLE_API_KEY=AIza' + 'A1b_' * 8 + 'Ab1',
+                     'gsk_' + 'aB19xZ' * 5, 'hf_' + 'aB19xZ' * 5,
+                     'npm_' + 'aB19xZ' * 5, 'AKIA' + 'AB12' * 4,
+                     'Authorization: Bearer aB19xZaB19xZaB19xZaB19xZ'):
+            with self.subTest(prefix=text[:20]):
+                self.assertTrue(contains_secret(text))
+
+    def test_prefixed_placeholders_and_variable_references_remain_allowed(self):
+        for text in ('DEEPSEEK_API_KEY=YOUR_API_KEY',
+                     'DB_PASSWORD=user_password',
+                     'AWS_SECRET_ACCESS_KEY=os.getenv("AWS_SECRET_ACCESS_KEY")',
+                     'ANTHROPIC_API_KEY="test-key"',
+                     'Authorization: Bearer YOUR_ACCESS_TOKEN',
+                     'access_token=4096', 'API_KEY=my_api_key_variable',
+                     'token=provider2AuthenticationValue',
+                     'api_key=environment2ConfiguredKeyReference'):
+            with self.subTest(text=text):
+                self.assertFalse(contains_secret(text))
+
     def test_compatibility_exposes_only_boolean_and_handles_empty_input(self):
         for text in ('token=4096', 'password="MyLongP@ss2026"'):
             self.assertIs(type(SECRET.search(text)), bool)

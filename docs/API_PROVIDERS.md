@@ -25,7 +25,7 @@ Endpoint custom là base URL, ví dụ `https://gateway.example/v1`, không thê
 3. Chọn model lấy được sau đăng nhập, chọn model đọc ảnh nếu cần, rồi **Lưu**. F8/F4/F9 dùng phiên này như những API khác. Quyền dùng model và giới hạn do gói ChatGPT/Codex quyết định.
 4. **Lấy lại model** kiểm tra phiên và tải model hiện tại; **Đăng xuất** đăng xuất phiên riêng của API đang chọn. Nếu CLI cũ không hỗ trợ app-server, cập nhật CLI theo hướng dẫn chính thức.
 
-Codex CLI thực hiện OAuth, lưu và làm mới token. App không lấy cookie hoặc phiên từ trình duyệt, không nhập kho đăng nhập Codex hiện có. Mỗi API Browser có thư mục riêng `.clipboardai-auth/<id>` cạnh EXE; thư mục này chứa dữ liệu xác thực nhạy cảm và đã được `.gitignore` loại khỏi Git. App không đọc token để gọi endpoint nội bộ; CLI thực hiện yêu cầu AI qua app-server.
+Codex CLI thực hiện OAuth, lưu và làm mới token, ưu tiên keyring của hệ điều hành khi tạo phiên mới nếu khả dụng và có thể dùng file dự phòng. App không lấy cookie hoặc phiên từ trình duyệt, không nhập kho đăng nhập Codex hiện có. Mỗi API Browser có thư mục riêng `.clipboardai-auth/<id>` cạnh EXE; phiên cũ lưu bằng file vẫn được giữ tương thích. Thư mục này có thể chứa dữ liệu xác thực nhạy cảm và đã được `.gitignore` loại khỏi Git. App không đọc token để gọi endpoint nội bộ; CLI thực hiện yêu cầu AI qua app-server.
 
 Mỗi yêu cầu tạo thread Codex tạm thời, đưa lịch sử ClipboardAI và ảnh vào yêu cầu, dùng thư mục làm việc trống và sandbox chỉ đọc. Shell, web search, apps và các tính năng agent được tắt trong cấu hình CLI; yêu cầu công cụ/phê duyệt không được app đáp ứng. Nếu CLI/model yêu cầu công cụ, app báo lỗi và giữ clipboard. Chỉ câu trả lời của turn đã hoàn tất mới được chấp nhận; các phần commentary không được copy thành đáp án. Giới hạn token của Browser do Codex/model quản lý; timeout và F10 được ClipboardAI theo dõi.
 
@@ -35,7 +35,11 @@ Claude, DeepSeek, Grok và Gemini trong bản này dùng **API key**. Nút **M�
 
 OpenAI-compatible, Anthropic Messages và Responses hỗ trợ chữ, ảnh và streaming. Thiếu sự kiện hoàn tất, lỗi mạng, hết token, từ chối hoặc yêu cầu công cụ đều không được xem là đáp án hoàn tất. Anthropic yêu cầu `max_tokens`; nếu không đặt giới hạn riêng, app dùng 8192. Responses dùng `max_output_tokens` khi có giới hạn và đặt `store=false`.
 
-Tự chuyển API có thể gửi cùng nội dung đến nhà cung cấp dự phòng đã bật. Hủy yêu cầu dừng chuyển API. API key trong `api_zoo.json` và dữ liệu phiên đăng nhập cục bộ cần được giữ riêng khi chia sẻ thư mục app.
+Tự chuyển API có thể gửi cùng nội dung đến nhà cung cấp dự phòng đã bật. Hủy yêu cầu dừng chuyển API. Khi **Lưu** API Zoo trên Windows, key được bảo vệ bằng Windows DPAPI, gắn với tài khoản và máy hiện tại. Cấu hình API Zoo plaintext cũ được chuyển ở lần lưu thành công tiếp theo. Nếu chuyển máy/tài khoản và không giải mã được file, app giữ file gốc; đổi tên `api_zoo.json`, tạo lại cấu hình và nhập lại key. `.env`/`mirai_config.json` và phiên Browser lưu file có thể còn thông tin xác thực plaintext, cần giữ riêng khi chia sẻ thư mục app.
+
+App chạy bằng quyền người dùng thông thường. Chỉ helper chuyển card mạng được nâng quyền qua UAC; đăng nhập Browser và gửi yêu cầu AI không cần quyền admin.
+
+Kết nối API, streaming và kiểm tra HTTPS khi chuyển mạng dùng proxy đã cấu hình cho người dùng Windows hoặc `HTTPS_PROXY`, với ngoại lệ `NO_PROXY`. Không cần nâng quyền để sử dụng proxy. HTTP response báo lỗi vẫn có thể xác nhận đường kết nối mạng; nó không chứng minh API key/model/quota dùng được.
 
 ## Nguồn tham khảo
 

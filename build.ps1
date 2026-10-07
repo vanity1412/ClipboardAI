@@ -11,11 +11,11 @@ try {
     # inaccessible Tcl/Tk runtime. Fail before producing an EXE without its UI.
     python scripts/check_tk_runtime.py
     if ($LASTEXITCODE -ne 0) { throw 'Build requires readable Tcl/Tk runtime files for region capture, API Zoo and hotkey settings' }
-    python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin --hidden-import tkinter --hidden-import _tkinter --name $Name --distpath $OutputDirectory --workpath build/work --specpath build src/deepseek_flash_entry.py
+    python -m PyInstaller --noconfirm --clean --onefile --windowed --hidden-import tkinter --hidden-import _tkinter --name $Name --distpath $OutputDirectory --workpath build/work --specpath build src/deepseek_flash_entry.py
     if ($LASTEXITCODE -ne 0) { throw 'Build EXE failed' }
     $taskExecutable = Join-Path $OutputDirectory ($Name + '.exe')
-    python -c "import sys, xml.etree.ElementTree as ET; from PyInstaller.utils.win32.winmanifest import read_manifest_from_executable; root = ET.fromstring(read_manifest_from_executable(sys.argv[1])); level = root.find('.//{urn:schemas-microsoft-com:asm.v3}requestedExecutionLevel'); assert level is not None and level.get('level') == 'requireAdministrator', 'EXE must require administrator'; print('EXE administrator manifest: OK')" $taskExecutable
-    if ($LASTEXITCODE -ne 0) { throw 'EXE administrator manifest verification failed' }
+    python -c "import sys, xml.etree.ElementTree as ET; from PyInstaller.utils.win32.winmanifest import read_manifest_from_executable; root = ET.fromstring(read_manifest_from_executable(sys.argv[1])); level = root.find('.//{urn:schemas-microsoft-com:asm.v3}requestedExecutionLevel'); assert level is not None and level.get('level') == 'asInvoker', 'EXE must run with normal user privileges'; print('EXE normal-user manifest: OK')" $taskExecutable
+    if ($LASTEXITCODE -ne 0) { throw 'EXE normal-user manifest verification failed' }
     Copy-Item -LiteralPath README.md -Destination (Join-Path $OutputDirectory 'README.md') -Force
     Copy-Item -LiteralPath docs/CHUC_NANG.md -Destination (Join-Path $OutputDirectory 'CHUC_NANG.md') -Force
     Copy-Item -LiteralPath docs/API_PROVIDERS.md -Destination (Join-Path $OutputDirectory 'API_PROVIDERS.md') -Force

@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlencode
-from urllib.request import Request, urlopen
 
 
 class APIHTTPError(RuntimeError):
@@ -119,9 +118,11 @@ def consolidate(data):
                 groups[identity]['name'] = 'Mirai'
             profiles.append(groups[identity])
         target = groups[identity]
+        target['enabled'] = target['enabled'] or p['enabled']
         if p['id'] == data['primary']:
             primary = target['id']
             target['model'], target['vision_model'] = p['model'], p['vision_model']
+            target['timeout'], target['max_tokens'] = p['timeout'], p['max_tokens']
         known = {m['id'] for m in target['models']}
         for m in p['models']:
             if m['id'] not in known:
@@ -137,12 +138,15 @@ class ZooStore:
     def load(self):
         if not self.path.exists():
             return validate({})
-        return consolidate(json.loads(self.path.read_text(encoding='utf-8-sig')))
+        from credential_storage import decode_profiles
+        return consolidate(decode_profiles(json.loads(self.path.read_text(encoding='utf-8-sig'))))
 
     def save(self, data):
         data = consolidate(data)
+        from credential_storage import encode_profiles
+        stored = encode_profiles(data)
         temporary = self.path.with_suffix('.tmp')
-        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding='utf-8')
         temporary.replace(self.path)
         return data
 
@@ -184,38 +188,37 @@ def selected_profile(config):
     return next((p for p in config.get('API_ZOO', {}).get('profiles', []) if 'zoo:' + p['id'] == ident and p['enabled']), None)
 
 
-def discover_models(profile, auth_root=None):
+def discover_models(profile, auth_root=None, cancel=None, timeout=60):
+    deadline = time.monotonic() + timeout
+    def remaining():
+        if cancel and cancel.is_set():
+            raise InterruptedError('Đã hủy lấy model')
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise TimeoutError('Hết thời gian lấy model')
+        return seconds
+    remaining()
     if profile.get('provider') == 'codex':
         from browser_provider import BrowserSession
-        with BrowserSession(profile, auth_root) as session:
+        with BrowserSession(profile, auth_root, cancel, deadline=deadline) as session:
             session.require_account()
             return session.models()
-    # A redirect may not carry an API credential to a second host.
-    from urllib.request import build_opener, HTTPRedirectHandler
-    class NoRedirect(HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
+    from http_transport import request_json
     headers = {'Accept': 'application/json', 'User-Agent': 'ClipboardAI/3.0'}
     if profile.get('provider') == 'anthropic':
         headers.update({'x-api-key': profile['api_key'], 'anthropic-version': '2023-06-01'})
     else:
         headers['Authorization'] = 'Bearer ' + profile['api_key']
     rows, cursor, cursors, total_bytes = [], None, set(), 0
-    opener = build_opener(NoRedirect())
     for _ in range(20):
         query = '?' + urlencode({'after_id': cursor}) if cursor else ''
-        req = Request(profile['base_url'] + '/models' + query, headers=headers)
-        try:
-            with opener.open(req, timeout=20) as response:
-                raw = response.read(4 * 1024 * 1024 + 1)
-                total_bytes += len(raw)
-                if total_bytes > 4 * 1024 * 1024:
-                    raise ValueError('Danh sách model vượt giới hạn')
-                data = json.loads(raw)
-        except Exception as exc:
-            if hasattr(exc, 'close'):
-                exc.close()
-            raise
+        data, received = request_json(profile['base_url'] + '/models' + query,
+                            headers=headers, timeout=min(20, remaining()),
+                            cancel=cancel, max_bytes=4 * 1024 * 1024 - total_bytes,
+                            return_size=True)
+        total_bytes += received
+        if total_bytes > 4 * 1024 * 1024:
+            raise ValueError('Danh sách model vượt giới hạn')
         if not isinstance(data, dict) or not isinstance(data.get('data'), list):
             raise ValueError('API không trả danh sách model hợp lệ')
         rows.extend(data['data'])
@@ -277,6 +280,28 @@ def probe_profile(profile, auth_root=None):
 class ZooRouter:
     def __init__(self):
         self.cooldowns = {}
+        self.billing_cooldowns = set()
+
+    def retry(self, profile):
+        """An explicit retry may recheck a topped-up account, never invalid keys."""
+        credential = ('key', profile['base_url'], profile['api_key'], profile['id'] if profile['provider'] == 'codex' else '')
+        if credential in self.billing_cooldowns:
+            self.cooldowns.pop(credential, None)
+            self.billing_cooldowns.discard(credential)
+
+    def retry_manual(self, profile):
+        credential = ('key', profile['base_url'], profile['api_key'], profile['id'] if profile['provider'] == 'codex' else '')
+        self.cooldowns.pop(credential, None)
+        self.billing_cooldowns.discard(credential)
+        for identity in list(self.cooldowns):
+            if identity[:3] == (profile['id'], profile['base_url'], profile['api_key']):
+                self.cooldowns.pop(identity, None)
+
+    def profile_state(self, profile):
+        credential = ('key', profile['base_url'], profile['api_key'], profile['id'] if profile['provider'] == 'codex' else '')
+        until = max([self.cooldowns.get(credential, 0)] + [value for identity, value in self.cooldowns.items()
+                    if identity[:3] == (profile['id'], profile['base_url'], profile['api_key'])])
+        return 'Bị khóa; kiểm tra key/quyền' if until == float('inf') else 'Đang tạm nghỉ' if until > time.monotonic() else 'Sẵn sàng'
 
     def run(self, config, selected, vision, call, cancel=None, notify=None):
         data = config['API_ZOO']
@@ -296,6 +321,7 @@ class ZooRouter:
             while attempts < 3:
                 if cancel and cancel.is_set():
                     raise InterruptedError('Đã hủy yêu cầu')
+                self.billing_cooldowns.discard(credential)
                 attempts += 1
                 if notify:
                     notify('API Zoo: ' + profile['name'] + ' — lần ' + str(attempts) + '/3')
@@ -313,8 +339,12 @@ class ZooRouter:
                     if not retryable or not data['auto']:
                         raise
                     last = exc
-                    if status in (401, 402, 403):
+                    if status in (401, 403):
                         self.cooldowns[identity if status == 403 else credential] = float('inf')
+                        break
+                    if status == 402:
+                        self.cooldowns[credential] = time.monotonic() + 30
+                        self.billing_cooldowns.add(credential)
                         break
                     cooldown = retry_delay(getattr(exc, 'retry_after', None)) if status == 429 else 5
                     self.cooldowns[credential if status == 429 else identity] = time.monotonic() + cooldown

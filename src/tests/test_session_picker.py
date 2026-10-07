@@ -24,13 +24,13 @@ class SessionArchiveTests(unittest.TestCase):
                               lambda: session.select(first)):
                 session = Session(session.path)
                 original_replace = Path.replace
-                writes = []
-                def fail_second_write(path, target):
-                    writes.append(target)
-                    if len(writes) == 2:
+                def fail_transition_write(path, target):
+                    # Unchanged saves may skip I/O; fail the actual archive
+                    # selection change rather than an implementation write count.
+                    if json.loads(path.read_text(encoding='utf-8'))['active_id'] != second:
                         raise PermissionError("synthetic disk failure")
                     return original_replace(path, target)
-                with patch.object(Path, "replace", new=fail_second_write):
+                with patch.object(Path, "replace", new=fail_transition_write):
                     self.assertFalse(operation())
                 self.assertTrue(session.error)
                 self.assertEqual((session.active_id, session.problem, session.last_answer),

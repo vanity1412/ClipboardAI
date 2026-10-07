@@ -1,5 +1,6 @@
 """Explicit physical-adapter and saved Wi-Fi selection with cooperative rollback."""
 import base64
+from contextlib import contextmanager
 import ctypes as C
 from ctypes import wintypes as W
 import json
@@ -8,6 +9,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+from urllib.parse import urlsplit
+from urllib.request import getproxies, proxy_bypass
 from uuid import UUID
 
 from wifi_networks import read_wifi_networks
@@ -17,12 +20,45 @@ HELPER_TIMEOUT = 45
 ROLLBACK_GRACE = 15
 _switch_lock = threading.Lock()
 _switch_pending = threading.Event()
+_switch_state_lock = threading.Lock()
+_network_closing = threading.Event()
+_active_switch = None
 _last_switch_outcome = None
 
 
 def network_recovery_pending():
     """A timed-out helper must finish recovery before another operation starts."""
     return _switch_pending.is_set()
+
+
+def shutdown_network(timeout=0):
+    """Cancel cooperatively; return only whether the helper has safely finished.
+
+    A False result means the app must keep running and retry before destroying
+    its tray/window. Never terminate an adapter helper midway through rollback.
+    """
+    _network_closing.set()
+    with _switch_state_lock:
+        active = _active_switch
+        if active is None:
+            return True
+        cancel_path, completed = active
+        if cancel_path is not None:
+            try:
+                cancel_path.write_text('cancel', encoding='ascii')
+            except OSError:
+                pass  # The worker may already have completed and cleaned up.
+    return completed.wait(max(0, timeout))
+
+
+def abort_network_shutdown():
+    """Resume the app after a failed history save prevented normal exit.
+
+    An existing helper still sees its cancellation file and finishes rollback;
+    the operation lock continues to reject new switches until then.
+    """
+    with _switch_state_lock:
+        _network_closing.clear()
 
 
 class DoublePress:
@@ -83,7 +119,7 @@ public static class ClipboardWifi {
 
 
 # These definitions also run under mocked cmdlets in the transaction tests.
-POWERSHELL_FUNCTIONS = r"""
+ADAPTER_INVENTORY_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 function Read-PhysicalAdapters {
@@ -98,6 +134,9 @@ function Read-PhysicalAdapters {
         }
     })
 }
+"""
+
+POWERSHELL_FUNCTIONS = ADAPTER_INVENTORY_SCRIPT + r"""
 function Find-PhysicalAdapter($id) {
     $found = @(Get-NetAdapter -Physical | Where-Object { ([guid]$_.InterfaceGuid).ToString() -eq $id })
     if ($found.Count -ne 1) { throw 'adapter_missing' }
@@ -113,13 +152,37 @@ function Test-AdapterReady($id) {
     $gateway6 = @($ip.IPv6DefaultGateway | Where-Object { $_.NextHop })
     return (($v4.Count -gt 0 -and $gateway4.Count -gt 0) -or ($v6.Count -gt 0 -and $gateway6.Count -gt 0))
 }
+function New-ProviderProbe($hostName) {
+    $address = [UriBuilder]::new('https', $hostName, 443, '/')
+    [Net.HttpWebRequest]::Create($address.Uri)
+}
 function Test-ProviderConnection($hostName) {
-    $client = [Net.Sockets.TcpClient]::new()
+    # Probe HTTPS without an API key, using the calling user's proxy settings.
+    # An HTTP error still proves that the verified TLS endpoint is reachable.
+    $response = $null
     try {
-        $task = $client.ConnectAsync($hostName, 443)
-        return ($task.Wait(4000) -and $client.Connected)
+        $probe = New-ProviderProbe $hostName
+        $probe.Method = 'HEAD'
+        $probe.Timeout = 4000
+        $probe.ReadWriteTimeout = 4000
+        $probe.AllowAutoRedirect = $false
+        $probe.Proxy = $null
+        if ($script:ProbeProxy) {
+            $proxyUri = [Uri]$script:ProbeProxy
+            $probe.Proxy = [Net.WebProxy]::new($proxyUri)
+            if ($proxyUri.UserInfo) {
+                $parts = $proxyUri.UserInfo.Split(@(':'), 2)
+                $password = if ($parts.Length -gt 1) { [Uri]::UnescapeDataString($parts[1]) } else { '' }
+                $probe.Proxy.Credentials = [Net.NetworkCredential]::new([Uri]::UnescapeDataString($parts[0]), $password)
+            }
+        }
+        $response = $probe.GetResponse()
+        return $true
+    } catch [Net.WebException] {
+        $response = $_.Exception.Response
+        return ($null -ne $response -and [int]$response.StatusCode -ne 407)
     } catch { return $false }
-    finally { $client.Dispose() }
+    finally { if ($null -ne $response) { $response.Dispose() } }
 }
 function Test-GroupReady($adapters) {
     foreach ($adapter in $adapters) {
@@ -147,6 +210,28 @@ function Disconnect-WifiProfile($id) {
     Initialize-WlanHelper
     [ClipboardWifi]::Disconnect([guid]$id)
 }
+function Restore-WifiConnection($id, $before) {
+    $current = Read-WifiConnection $id
+    if ($before.profile) {
+        if ($current.profile -cne $before.profile -or $current.ssid_hex -ne $before.ssid_hex) {
+            Connect-WifiProfile $id $before.profile
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ($true) {
+            $current = Read-WifiConnection $id
+            if ($current.profile -ceq $before.profile -and $current.ssid_hex -eq $before.ssid_hex -and (Test-AdapterReady $id)) { return }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'rollback_failed' }
+            Start-Sleep -Milliseconds 250
+        }
+    } else {
+        if ($current.profile) { Disconnect-WifiProfile $id }
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        while ((Read-WifiConnection $id).profile) {
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'rollback_failed' }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+}
 function Invoke-NetworkSwitch($request) {
     $initial = @(Read-PhysicalAdapters)
     if ($request.target_mode -notin @('wifi','lan')) { throw 'adapter_missing' }
@@ -157,6 +242,7 @@ function Invoke-NetworkSwitch($request) {
     $sourceTouched = [Collections.Generic.List[string]]::new()
     $wifiBefore = $null
     $wifiTouched = $false
+    $sourceWifiBefore = @{}
     $seconds = if ($request.timeout_seconds) { [Math]::Min(35, [Math]::Max(1, [int]$request.timeout_seconds)) } else { 35 }
     $operationDeadline = [DateTime]::UtcNow.AddSeconds($seconds)
     try {
@@ -164,6 +250,12 @@ function Invoke-NetworkSwitch($request) {
         if ($request.wifi_profile) {
             if ($request.target_mode -ne 'wifi' -or $targets.Count -ne 1) { throw 'adapter_missing' }
             if ($targets[0].enabled) { $wifiBefore = Read-WifiConnection $targets[0].id }
+        }
+        foreach ($source in $sources) {
+            Test-SwitchDeadline $request $operationDeadline
+            if ($source.enabled -and $source.kind -eq 'wifi') {
+                $sourceWifiBefore[$source.id] = Read-WifiConnection $source.id
+            }
         }
         foreach ($target in $targets) {
             Test-SwitchDeadline $request $operationDeadline
@@ -198,6 +290,7 @@ function Invoke-NetworkSwitch($request) {
         }
         Test-SwitchDeadline $request $operationDeadline
         if (-not (Test-GroupReady $targets) -or -not (Test-ProviderConnection $request.probe_host)) { throw 'provider_unreachable' }
+        Test-SwitchDeadline $request $operationDeadline
         $final = @(Read-PhysicalAdapters)
         if (@($final | Where-Object { $_.id -notin @($targets.id) -and $_.enabled }).Count) { throw 'disable_failed' }
         foreach ($target in $targets) {
@@ -215,27 +308,13 @@ function Invoke-NetworkSwitch($request) {
                 if ([int](Find-PhysicalAdapter $id).AdminStatus -ne 1) { throw 'rollback_failed' }
             } catch { $rollbackOk = $false }
         }
-        if ($wifiTouched -and $wifiBefore -and $wifiBefore.profile) {
-            try {
-                Connect-WifiProfile $targets[0].id $wifiBefore.profile
-                $restoreDeadline = [DateTime]::UtcNow.AddSeconds(10)
-                while ($true) {
-                    $restoredWifi = Read-WifiConnection $targets[0].id
-                    if ($restoredWifi.profile -ceq $wifiBefore.profile -and (Test-AdapterReady $targets[0].id)) { break }
-                    if ([DateTime]::UtcNow -ge $restoreDeadline) { throw 'rollback_failed' }
-                    Start-Sleep -Milliseconds 250
-                }
-            } catch { $rollbackOk = $false }
+        if ($wifiTouched -and $wifiBefore) {
+            try { Restore-WifiConnection $targets[0].id $wifiBefore } catch { $rollbackOk = $false }
         }
-        elseif ($wifiTouched -and $wifiBefore) {
-            try {
-                Disconnect-WifiProfile $targets[0].id
-                $restoreDeadline = [DateTime]::UtcNow.AddSeconds(5)
-                while ((Read-WifiConnection $targets[0].id).profile) {
-                    if ([DateTime]::UtcNow -ge $restoreDeadline) { throw 'rollback_failed' }
-                    Start-Sleep -Milliseconds 250
-                }
-            } catch { $rollbackOk = $false }
+        foreach ($id in $sourceTouched) {
+            if ($sourceWifiBefore.ContainsKey($id)) {
+                try { Restore-WifiConnection $id $sourceWifiBefore[$id] } catch { $rollbackOk = $false }
+            }
         }
         # Administrative enable alone does not establish Wi-Fi/DHCP. Preserve
         # the new card if an originally connected old card has not recovered.
@@ -271,7 +350,7 @@ function Invoke-WifiPriority($request) {
     if ($result.ok -or $result.code -notin @('target_unavailable','provider_unreachable')) { return $result }
     # LAN might have been disabled by the previous Wi-Fi session. Try it if
     # Wi-Fi is unavailable, within this same elevated transaction/UAC prompt.
-    $fallback = [pscustomobject]@{target_mode='lan'; probe_host=$request.probe_host}
+    $fallback = [pscustomobject]@{target_mode='lan'; probe_host=$request.probe_host; cancel_path=$request.cancel_path; timeout_seconds=$request.timeout_seconds}
     $result = Invoke-NetworkSwitch $fallback
     if ($result.ok) { $result.code = 'fallback_lan' }
     return $result
@@ -289,7 +368,7 @@ def powershell_path():
 
 
 def read_adapters():
-    command = POWERSHELL_FUNCTIONS + '\nConvertTo-Json -InputObject @(Read-PhysicalAdapters) -Depth 4 -Compress'
+    command = ADAPTER_INVENTORY_SCRIPT + '\nConvertTo-Json -InputObject @(Read-PhysicalAdapters) -Depth 4 -Compress'
     result = subprocess.run([powershell_path(), '-NoProfile', '-NonInteractive', '-EncodedCommand',
                              encoded_command(command)], capture_output=True, timeout=20,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -311,14 +390,25 @@ def make_switch_script(target_mode, probe_host, result_path, prefer_wifi=False, 
     if target_mode not in ('wifi', 'lan'):
         raise ValueError('adapter_missing')
     request = dict(target_mode=target_mode, probe_host=probe_host,
-                   result_path=str(result_path), prefer_wifi=bool(prefer_wifi))
+                   result_path=str(result_path), prefer_wifi=bool(prefer_wifi),
+                   wifi_helper=WLAN_HELPER_SOURCE)
+    # Send proxy selection from the unelevated user, including no_proxy bypass;
+    # a UAC helper may run under another administrator's registry/environment.
+    try:
+        proxy = None if proxy_bypass(probe_host) else getproxies().get('https')
+    except (OSError, ValueError):
+        proxy = None
+    if proxy:
+        address = urlsplit(proxy if '://' in proxy else 'http://' + proxy)
+        if address.scheme not in ('http', 'https') or not address.hostname:
+            raise ValueError('provider_unreachable')
+        request['probe_proxy'] = address.geturl()
     if adapter_id is not None:
         request['adapter_id'] = str(UUID(adapter_id))
     if wifi_profile is not None:
         if target_mode != 'wifi' or not isinstance(wifi_profile, str) or not wifi_profile or len(wifi_profile) > 255 or '\0' in wifi_profile:
             raise ValueError('wifi_profile_missing')
         request['wifi_profile'] = wifi_profile
-        request['wifi_helper'] = WLAN_HELPER_SOURCE
     if ssid_hex is not None:
         if not isinstance(ssid_hex, str) or len(ssid_hex) > 64 or len(ssid_hex) % 2:
             raise ValueError('wifi_network_missing')
@@ -333,6 +423,7 @@ def make_switch_script(target_mode, probe_host, result_path, prefer_wifi=False, 
     payload = base64.b64encode(json.dumps(request, ensure_ascii=True).encode('utf-8')).decode('ascii')
     return POWERSHELL_FUNCTIONS + "\n$request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + payload + "')) | ConvertFrom-Json\n" + r"""
 $script:WlanHelperSource = $request.wifi_helper
+$script:ProbeProxy = $request.probe_proxy
 try {
     $result = if ($request.prefer_wifi) { Invoke-WifiPriority $request } else { Invoke-NetworkSwitch $request }
 }
@@ -342,20 +433,49 @@ $text = ConvertTo-Json -InputObject $result -Depth 5 -Compress
 """
 
 
-def _execute_switch(target_mode, probe_host, prefer_wifi, adapter_id, wifi_profile,
-                    ssid_hex, result_path, cancel_path):
-    # Keep the result file owned by the unelevated app. The elevated helper
-    # writes into it instead of creating a file the app may not read.
-    result_path.write_text('', encoding='utf-8')
-    script = make_switch_script(target_mode, probe_host, result_path, prefer_wifi,
-                                adapter_id, wifi_profile, ssid_hex, cancel_path)
-    script_path = result_path.with_suffix('.ps1')
-    script_path.write_text(script, encoding='utf-8-sig')
-    arguments = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script_path)]
+@contextmanager
+def _locked_script(path, script):
+    """Keep the elevated helper's code immutable until it has exited.
+
+    After locking the script for read-only sharing, verify its exact bytes
+    before elevation. This closes the race between writing and opening it;
+    the held handle prevents replacement, truncation and writes afterwards.
+    """
+    kernel = C.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p,
+                                  W.DWORD, W.DWORD, W.HANDLE]
+    kernel.CreateFileW.restype = W.HANDLE
+    kernel.ReadFile.argtypes = [W.HANDLE, C.c_void_p, W.DWORD,
+                               C.POINTER(W.DWORD), C.c_void_p]
+    kernel.ReadFile.restype = W.BOOL
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [W.HANDLE], W.BOOL
+    data = script.encode('utf-8-sig')
+    with path.open('xb') as file:
+        file.write(data)
+    handle = kernel.CreateFileW(str(path), 0x80000000, 1, None, 3, 0x100, None)
+    if not handle or handle == C.c_void_p(-1).value:
+        raise C.WinError(C.get_last_error())
+    try:
+        buffer = C.create_string_buffer(len(data) + 1)
+        read = W.DWORD()
+        if not kernel.ReadFile(handle, buffer, len(buffer), C.byref(read), None) or read.value != len(data) or buffer.raw[:read.value] != data:
+            raise OSError('switch_failed')
+        yield
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _launch_helper(arguments):
     if C.windll.shell32.IsUserAnAdmin():
-        result = subprocess.run([powershell_path()] + arguments,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
-        if result.returncode:
+        with subprocess.Popen([powershell_path()] + arguments,
+                              creationflags=subprocess.CREATE_NO_WINDOW) as process:
+            while True:
+                try:
+                    code = process.wait(timeout=.25)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        if code:
             raise OSError('switch_failed')
     else:
         # Only this fixed adapter transaction is elevated; main app stays normal.
@@ -369,18 +489,44 @@ def _execute_switch(target_mode, probe_host, prefer_wifi, adapter_id, wifi_profi
         kernel = C.WinDLL('kernel32', use_last_error=True)
         shell.ShellExecuteExW.argtypes, shell.ShellExecuteExW.restype = [C.POINTER(ExecuteInfo)], W.BOOL
         kernel.WaitForSingleObject.argtypes, kernel.WaitForSingleObject.restype = [W.HANDLE, W.DWORD], W.DWORD
-        kernel.CloseHandle.argtypes = [W.HANDLE]
+        kernel.GetExitCodeProcess.argtypes, kernel.GetExitCodeProcess.restype = [W.HANDLE, C.POINTER(W.DWORD)], W.BOOL
+        kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [W.HANDLE], W.BOOL
         info = ExecuteInfo()
         info.cbSize, info.fMask, info.lpVerb = C.sizeof(info), 0x40 | 0x400, 'runas'
         info.lpFile, info.lpParameters, info.nShow = powershell_path(), subprocess.list2cmdline(arguments), 0
         if not shell.ShellExecuteExW(C.byref(info)):
             raise PermissionError('uac_denied' if C.get_last_error() == 1223 else 'admin_required')
         try:
-            # Blocking UAC/process waits are confined to the network thread.
-            if kernel.WaitForSingleObject(info.hProcess, 0xFFFFFFFF) != 0:
+            # The owning worker stays alive until recovery is complete. Every
+            # OS wait is bounded; shutdown never abandons a running helper.
+            while True:
+                status = kernel.WaitForSingleObject(info.hProcess, 250)
+                if status == 0:
+                    break
+                if status != 258:  # WAIT_TIMEOUT
+                    raise OSError('switch_failed')
+            code = W.DWORD()
+            if not kernel.GetExitCodeProcess(info.hProcess, C.byref(code)) or code.value:
                 raise OSError('switch_failed')
         finally:
             kernel.CloseHandle(info.hProcess)
+
+
+def _execute_switch(target_mode, probe_host, prefer_wifi, adapter_id, wifi_profile,
+                    ssid_hex, result_path, cancel_path):
+    # Keep the result file owned by the unelevated app. The elevated helper
+    # writes into it instead of creating a file the app may not read.
+    if cancel_path.exists():
+        return dict(ok=False, code='switch_timeout')
+    result_path.write_text('', encoding='utf-8')
+    script = make_switch_script(target_mode, probe_host, result_path, prefer_wifi,
+                                adapter_id, wifi_profile, ssid_hex, cancel_path)
+    script_path = result_path.with_suffix('.ps1')
+    arguments = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script_path)]
+    with _locked_script(script_path, script):
+        if cancel_path.exists():
+            return dict(ok=False, code='switch_timeout')
+        _launch_helper(arguments)
     if not result_path.exists() or result_path.stat().st_size == 0:
         raise OSError('switch_failed')
     return json.loads(result_path.read_text(encoding='utf-8-sig'))
@@ -394,26 +540,45 @@ def run_switch(target_mode, probe_host, prefer_wifi=False, adapter_id=None,
     If Windows/UAC/driver is still blocked after the grace period, retain all
     temporary resources and mark recovery pending until its worker finishes.
     """
-    if not _switch_lock.acquire(blocking=False):
-        return dict(ok=False, code='switch_recovery_pending', recovery_pending=True)
+    global _active_switch
+    completed = threading.Event()
+    with _switch_state_lock:
+        if _network_closing.is_set():
+            return dict(ok=False, code='switch_timeout')
+        if not _switch_lock.acquire(blocking=False):
+            return dict(ok=False, code='switch_recovery_pending', recovery_pending=True)
+        _switch_pending.set()
+        _active_switch = (None, completed)
+    folder = None
     try:
         folder = tempfile.TemporaryDirectory(prefix='ClipboardAI_Network_')
         result_path = Path(folder.name) / 'result.json'
         cancel_path = Path(folder.name) / 'cancel'
         result_path.write_text('', encoding='utf-8')
+        with _switch_state_lock:
+            _active_switch = (cancel_path, completed)
+            if _network_closing.is_set():
+                cancel_path.write_text('cancel', encoding='ascii')
     except Exception:
-        _switch_lock.release()
+        if folder is not None:
+            try:
+                folder.cleanup()
+            except OSError:
+                pass
+        with _switch_state_lock:
+            _active_switch = None
+            _switch_pending.clear()
+            _switch_lock.release()
+            completed.set()
         raise
-    completed = threading.Event()
     outcome = []
-    _switch_pending.set()
 
     def work():
-        global _last_switch_outcome
+        global _last_switch_outcome, _active_switch
         try:
             outcome.append(_execute_switch(target_mode, probe_host, prefer_wifi,
                        adapter_id, wifi_profile, ssid_hex, result_path, cancel_path))
-        except Exception as exc:
+        except BaseException as exc:
             outcome.append(exc)
         finally:
             _last_switch_outcome = outcome[0]
@@ -423,11 +588,26 @@ def run_switch(target_mode, probe_host, prefer_wifi=False, adapter_id=None,
             except OSError:
                 pass
             finally:
-                _switch_pending.clear()
-                _switch_lock.release()
-                completed.set()
+                with _switch_state_lock:
+                    _active_switch = None
+                    _switch_pending.clear()
+                    _switch_lock.release()
+                    completed.set()
 
-    threading.Thread(target=work, daemon=True).start()
+    try:
+        worker = threading.Thread(target=work, daemon=False)
+        worker.start()
+    except Exception:
+        try:
+            folder.cleanup()
+        except OSError:
+            pass
+        with _switch_state_lock:
+            _active_switch = None
+            _switch_pending.clear()
+            _switch_lock.release()
+            completed.set()
+        raise
     if not completed.wait(HELPER_TIMEOUT):
         try:
             cancel_path.write_text('cancel', encoding='ascii')
@@ -438,7 +618,7 @@ def run_switch(target_mode, probe_host, prefer_wifi=False, adapter_id=None,
         if not completed.wait(ROLLBACK_GRACE):
             return dict(ok=False, code='switch_recovery_pending', recovery_pending=True)
     result = outcome[0]
-    if isinstance(result, Exception):
+    if isinstance(result, BaseException):
         raise result
     return result
 
@@ -503,6 +683,12 @@ class NetworkManager:
     @property
     def recovery_pending(self):
         return network_recovery_pending()
+
+    def shutdown(self, timeout=0):
+        return shutdown_network(timeout)
+
+    def abort_shutdown(self):
+        abort_network_shutdown()
 
     def perform(self, target='toggle', probe_host='api.deepseek.com', adapter_id=None,
                 profile_name=None, ssid=None):
