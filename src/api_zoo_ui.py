@@ -60,6 +60,8 @@ def _open_editor(window, root_path, config, results):
     window.title('API Zoo')
     window.geometry('740x580')
     window.minsize(650, 570)
+    from window_layout import place_tk
+    place_tk(window, config, keep_size=True)
     local = queue.Queue()
     auth_root = str(Path(root_path).resolve() / '.clipboardai-auth')
     try:
@@ -428,6 +430,7 @@ def _open_editor(window, root_path, config, results):
     results.put(('zoo_opened', window.winfo_id()))
     if frame.winfo_reqheight() + 24 > 580:
         window.geometry(f'740x{frame.winfo_reqheight() + 24}')
+    place_tk(window, config, keep_size=True)
     try:
         window.mainloop()
     finally:

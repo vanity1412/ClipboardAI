@@ -1143,6 +1143,7 @@ class WindowsApp:
         self.hotkeys = []
         config = {'HOTKEYS': dict(self.config.get('HOTKEYS', {})),
                   'HOTKEYS_DISABLED': list(self.config.get('HOTKEYS_DISABLED', []))}
+        config.update({name: self.config[name] for name in ('PANEL_WIDTH', 'PANEL_HEIGHT', 'PANEL_POSITION') if name in self.config})
         def editor():
             try:
                 open_editor(config, self.results)
@@ -2425,7 +2426,7 @@ class WindowsApp:
                     self.results.put(("captured", job["id"]))
                 if png is not None and job.get('mask_images'):
                     from image_redaction import review_png
-                    png = review_png(png, job['cancel'])
+                    png = review_png(png, job['cancel'], settings=job.get('config'))
                 if is_chat(job['mode']):
                     from conversation_memory import prepare_history
                     memory = job.get('memory_messages', history)

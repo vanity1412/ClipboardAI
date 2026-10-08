@@ -134,6 +134,8 @@ def _open_editor(window, config, mode, results):
     poll()
     window.update_idletasks()
     results.put(('prompt_opened', window.winfo_id()))
+    from window_layout import place_tk
+    place_tk(window, config)
     try:
         window.mainloop()
     finally:

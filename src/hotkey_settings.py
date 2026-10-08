@@ -127,6 +127,8 @@ def open_editor(config, results):
     button = ttk.Button(frame, text='Lưu', command=save)
     button.grid(row=13, column=1, sticky='e')
     try:
+        from window_layout import place_tk
+        place_tk(root, config, keep_size=True)
         poll()
         root.mainloop()
     finally:

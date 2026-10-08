@@ -49,15 +49,24 @@ def place_native(user, hwnd, settings):
     user.SetWindowPos(hwnd, None, x, y, width, height, 0x14)
 
 
-def place_tk(root, settings=None):
+def place_tk(root, settings=None, keep_size=False):
     settings = settings or {}
     work = work_area((0, 0, root.winfo_screenwidth(), root.winfo_screenheight()))
-    x, y, width, height = panel_bounds(settings, work)
+    dimensions = dict(settings)
+    if keep_size:
+        root.update_idletasks()
+        dimensions.update(PANEL_WIDTH=max(int(settings.get('PANEL_WIDTH', DEFAULT_WIDTH)), root.winfo_width()),
+                          PANEL_HEIGHT=max(int(settings.get('PANEL_HEIGHT', DEFAULT_HEIGHT)), root.winfo_height()))
+    x, y, width, height = panel_bounds(dimensions, work)
     root.minsize(min(360, width), min(480, height))
     root.geometry(f'{width}x{height}{x:+d}{y:+d}')
     root.resizable(True, True)
     root.update_idletasks()
-    if os.name == 'nt':
+    def anchor():
+        if not root.winfo_exists():
+            return
+        if os.name != 'nt':
+            return
         # Set exact coordinates for monitors left of the primary display;
         # Tk interprets negative geometry coordinates relative to screen edges.
         user = ctypes.WinDLL('user32', use_last_error=True)
@@ -69,5 +78,23 @@ def place_tk(root, settings=None):
         hwnd = user.GetAncestor(root.winfo_id(), 2)
         rect = wintypes.RECT()
         if user.GetWindowRect(hwnd, ctypes.byref(rect)):
-            x, y, _, _ = panel_bounds(settings, work, (rect.right-rect.left, rect.bottom-rect.top))
+            x, y, _, _ = panel_bounds(dimensions, work, (rect.right-rect.left, rect.bottom-rect.top))
             user.SetWindowPos(hwnd, None, x, y, 0, 0, 0x15)
+    anchor()
+    # A withdrawn/new Tk window may be moved by Windows when mapped. Anchor
+    # once after mapping, then allow the user to move and resize normally.
+    pending = [root.after_idle(anchor)]
+    def mapped(event):
+        if event.widget is root:
+            if pending[0] is not None:
+                root.after_cancel(pending[0])
+            pending[0] = root.after_idle(anchor)
+    def destroyed(event):
+        if event.widget is root and pending[0] is not None:
+            try:
+                root.after_cancel(pending[0])
+            except Exception:
+                pass
+            pending[0] = None
+    root.bind('<Map>', mapped, add='+')
+    root.bind('<Destroy>', destroyed, add='+')

@@ -17,7 +17,7 @@ def redact_png(png, boxes):
     return output.getvalue()
 
 
-def review_png(png, cancel):
+def review_png(png, cancel, settings=None):
     import tkinter as tk
     from tkinter import ttk
     from PIL import Image, ImageTk
@@ -62,6 +62,8 @@ def review_png(png, cancel):
         ttk.Button(bar, text='Xác nhận ảnh và tiếp tục', command=send).pack(side='left')
         ttk.Button(bar, text='Hủy gửi', command=close).pack(side='right')
         root.protocol('WM_DELETE_WINDOW', close)
+        from window_layout import place_tk
+        place_tk(root, settings, keep_size=True)
         def poll():
             nonlocal timer
             if cancel.is_set():
