@@ -12,8 +12,8 @@ Hai tên EXE dùng cùng mã nguồn trong `src`. Bảng dưới là bộ phím 
 | Shift+F9 | Chọn vùng ảnh bổ sung vào phiên hiện tại |
 | F10 | Hủy yêu cầu AI hoặc chọn vùng; không copy đáp án dở |
 | Shift+F10 | Gửi lại yêu cầu đã lưu, không đọc câu hỏi mới từ clipboard |
-| F7 | Copy đáp án hoàn tất gần nhất, không gọi AI lại |
-| Shift+F7 | Copy đáp án của phiên đang chọn |
+| F7 | Copy và hiện popup đáp án hoàn tất gần nhất trong khoảng 0,5 giây, không gọi AI lại |
+| Shift+F7 | Copy và hiện popup đáp án của phiên đang chọn |
 | F6 | Mở danh sách hội thoại và thao tác quản lý phiên |
 | F3 hai lần nhanh | Mở menu chọn card mạng/Wi-Fi |
 | Esc hoặc chuột phải khi chọn vùng | Hủy chọn vùng, giữ clipboard và phiên |
@@ -21,6 +21,7 @@ Hai tên EXE dùng cùng mã nguồn trong `src`. Bảng dưới là bộ phím 
 | Shift+Enter trong ô chat | Xuống dòng |
 | Esc trong chat | Ẩn cửa sổ chat, không hủy AI |
 | Rê chuột vào icon tray | Xem trạng thái, thời gian xử lý, đáp án hoặc lỗi |
+| AI trả lời hoàn tất | Tự hiện đáp án gọn ở góc dưới bên phải màn hình đang dùng khoảng 0,5 giây |
 
 ## Menu chuột phải icon tray
 
@@ -98,6 +99,10 @@ Bỏ chọn **Bật** để trả riêng phím đó; tổ hợp đã nhập vẫ
 Luồng dùng: **copy/chọn ảnh → gửi → chờ hoàn tất → Ctrl+V**. F4/F8 bắt đầu câu hỏi mới; F9/Shift+F9 dùng dữ kiện trước. Shift+F9 chỉ bổ sung ảnh, không kèm chữ clipboard.
 
 Chọn vùng dùng ảnh cửa sổ được lấy trước khi bộ chọn mở. Kéo chuột và thả để gửi; Esc, chuột phải hoặc phím Hủy đã cấu hình hủy chọn. Clipboard đổi trong lúc chọn hoặc chờ AI được bảo vệ; dùng **F7** hoặc menu Copy để lấy đáp án hoàn tất. Không có cửa sổ chat tự bật khi trả lời.
+
+Khi AI trả lời hoàn tất, popup đáp án gọn với chữ màu xám nhạt như tray (`#B8B8B8`) hiện ở góc dưới bên phải màn hình đang dùng và tự ẩn sau khoảng **0,5 giây**. Popup không lấy focus, không chặn chuột và dùng cửa sổ topmost để hiện trên web toàn màn hình F11 thông thường. Không bảo đảm hiển thị trên desktop bảo mật hoặc phần mềm khóa màn hình. Popup tạm ẩn khi mở menu của tool, gồm menu chọn mạng bằng **F3 hai lần**, để menu vẫn thấy và thao tác được. Đáp án dài có thể bị giới hạn trong popup; **F7**, menu Copy hoặc Mở chat trong tray vẫn cho lấy/xem câu trả lời đầy đủ.
+
+**F7** copy đáp án hoàn tất gần nhất và hiện lại chính đáp án đó trong popup khoảng **0,5 giây**, kể cả khi yêu cầu mới đang chạy. Thao tác này không gọi AI lại, không hủy yêu cầu mới và không đổi trạng thái đang xử lý. **Shift+F7** copy và hiện đáp án của phiên đang chọn.
 
 Gửi lại một lượt hỏi tiếp bị hủy/lỗi giữ lịch sử đã hoàn tất trước đó, kể cả khi nội dung hỏi tiếp trùng câu cũ. Gửi lại lượt đã hoàn tất thay đáp án của lượt đó khi thành công. Phản hồi thiếu kết thúc, bị cắt do token, từ chối hoặc yêu cầu công cụ không được coi là đáp án hoàn tất để tự copy; phần thông báo đang xử lý của model cũng không được ghép vào đáp án cuối.
 

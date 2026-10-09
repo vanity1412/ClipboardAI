@@ -153,14 +153,15 @@ class StorageStatusTests(unittest.TestCase):
             app = self.app(root)
             app.busy = False
             app.hwnd, app.user = 123, Mock()
+            app.user.GetForegroundWindow.return_value = 456
+            app.user.GetWindowLongPtrW.return_value = 0
+            app.user.GetWindowLongW.return_value = 0
             app.session.updated_at = "9999-12-31T23:59:59+00:00"
             app.user.TrackPopupMenu.return_value = 0
-            def work_area(action, param, rect, flags):
-                rect._obj.right, rect._obj.bottom = 1920, 1040
-                return True
-            app.user.SystemParametersInfoW.side_effect = work_area
             app.start_request = Mock()
-            app.session_menu()
+            with patch('window_layout.work_area', return_value=(0, 0, 1920, 1040)) as work:
+                app.session_menu()
+            work.assert_called_once_with(hwnd=456)
             self.assertTrue(any("Không rõ thời gian" in call.args[3]
                                 for call in app.user.AppendMenuW.call_args_list))
             app.start_request.assert_not_called()

@@ -40,6 +40,7 @@ def run(native):
             self_test, app.self_test = app.self_test, False
             assert app.session.mode == CHAT and app.session.auto_copy
             assert not app.user.IsWindowVisible(app.hwnd)
+            foreground = app.user.GetForegroundWindow()
             app.send_clipboard()
             until = time.monotonic() + 3
             while app.busy and time.monotonic() < until:
@@ -50,8 +51,13 @@ def run(native):
             assert app.session.last_answer == 'Câu 1: 2\nCâu 2: A'
             assert 'không có nhãn' in app.client.ask.call_args.kwargs['instruction']
             assert not app.user.IsWindowVisible(app.hwnd)
+            assert app.user.IsWindowVisible(app.notice), 'Completed answer popup did not appear'
+            assert app.user.GetForegroundWindow() == foreground, 'Completed answer popup took focus'
+            with patch('windows_native.time.monotonic', return_value=app.notice_until + .01):
+                app.update_notice()
             assert not app.user.IsWindowVisible(app.notice)
-            report.update(auto_copy=True, concise_instruction=True, no_completion_overlay=True,
+            report.update(auto_copy=True, concise_instruction=True, completion_popup=True,
+                          completion_popup_expires=True, completion_popup_does_not_take_focus=True,
                           panel_stays_hidden=True)
             calls = app.client.ask.call_count
             app.window_proc(app.hwnd, 0x0312, 215, 0)

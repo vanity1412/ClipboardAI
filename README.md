@@ -1,6 +1,6 @@
 # ClipboardAI
 
-Ứng dụng Windows chạy nền: chụp/copy câu hỏi hoặc code, gửi AI, nhận đáp án tự vào clipboard để Ctrl+V. Rê chuột vào icon tray để xem trạng thái, số giây xử lý và đáp án gọn.
+Ứng dụng Windows chạy nền: chụp/copy câu hỏi hoặc code, gửi AI, nhận đáp án tự vào clipboard để Ctrl+V. Khi hoàn tất, đáp án gọn màu xám nhạt như tray (`#B8B8B8`) hiện ở góc dưới bên phải màn hình đang dùng trong khoảng 0,5 giây. Rê chuột vào icon tray để xem trạng thái, số giây xử lý và đáp án gọn.
 
 Bảng chức năng đầy đủ, menu tray, các cửa sổ cài đặt và vị trí mã nguồn: [docs/CHUC_NANG.md](docs/CHUC_NANG.md). Tài liệu này cũng được chép vào thư mục `dist` khi build.
 
@@ -21,14 +21,14 @@ API Zoo có mẫu OpenAI, **OpenAI Browser/ChatGPT**, Claude, DeepSeek, Grok, Ge
 | Shift+F9 | Chụp ảnh bổ sung cho phiên hiện tại |
 | F10 | Hủy; giữ clipboard |
 | Shift+F10 | Gửi lại yêu cầu đã lưu |
-| F7 | Copy lại đáp án hoàn tất gần nhất |
-| Shift+F7 | Copy đáp án phiên đang chọn |
+| F7 | Copy lại và hiện popup đáp án hoàn tất gần nhất trong khoảng 0,5 giây |
+| Shift+F7 | Copy và hiện popup đáp án phiên đang chọn |
 | F6 | Chọn/quản lý phiên và đáp án |
 | F3 hai lần | Mở menu chọn card mạng/Wi-Fi |
 
-F4/F8 độc lập; F9/Shift+F9 dùng dữ kiện trước. Clipboard đổi trong lúc chạy sẽ được bảo vệ; dùng menu copy đáp án hoặc F7 để lấy lại kết quả. Không có cửa sổ chat tự bật khi trả lời. Menu `Tạm dừng` trả phím cho ứng dụng khác; không hủy yêu cầu đang chạy. Phím global có thể không bắt được trong app chạy quyền admin. Các phím đã đăng ký có thể chặn hành vi gốc.
+F4/F8 độc lập; F9/Shift+F9 dùng dữ kiện trước. Clipboard đổi trong lúc chạy sẽ được bảo vệ; dùng menu copy đáp án hoặc F7 để lấy lại kết quả. Không có cửa sổ chat tự bật khi trả lời. Popup đáp án tự ẩn sau khoảng 0,5 giây, không lấy focus và cho chuột bấm xuyên xuống ứng dụng bên dưới. Popup dùng cửa sổ topmost để hiện trên web toàn màn hình F11 thông thường; không bảo đảm hiển thị trên desktop bảo mật hoặc phần mềm khóa màn hình. Popup tạm ẩn khi mở menu của tool, gồm menu chọn mạng bằng F3 hai lần, để không che menu. Đáp án dài có thể chỉ hiện bản xem gọn; F7/menu tray vẫn lấy được câu trả lời đầy đủ. Menu `Tạm dừng` trả phím cho ứng dụng khác; không hủy yêu cầu đang chạy. Phím global có thể không bắt được trong app chạy quyền admin. Các phím đã đăng ký có thể chặn hành vi gốc.
 
-F7 copy đáp án gần nhất; Shift+F7 copy đáp án phiên đang chọn. Muốn mở chat, chọn **Mở chat** trong menu tray; Esc trong ô nhập sẽ ẩn chat. Bộ phím mặc định còn lại được giữ nguyên, không áp một bộ phím riêng cho Chrome.
+F7 copy đáp án hoàn tất gần nhất và hiện lại chính đáp án đó trong popup khoảng 0,5 giây, kể cả khi yêu cầu mới đang chạy; không gọi AI lại hoặc đổi trạng thái xử lý. Shift+F7 copy và hiện đáp án phiên đang chọn. Muốn mở chat, chọn **Mở chat** trong menu tray; Esc trong ô nhập sẽ ẩn chat. Bộ phím mặc định còn lại được giữ nguyên, không áp một bộ phím riêng cho Chrome.
 
 ## Cài đặt phím tắt
 

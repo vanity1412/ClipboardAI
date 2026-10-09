@@ -105,10 +105,19 @@ def run(native):
                 switch.assert_called_once_with('wifi', adapter_id='22222222-2222-2222-2222-222222222222', show_picker=False)
             report.update(compact_menu=True, session_actions_in_f6=True,
                           individual_adapter_picker=True, no_automatic_network_switch=True)
+            foreground = app.user.GetForegroundWindow()
             app.send_clipboard()
             pump(lambda: not app.busy)
             ident = app.session.active_id
             assert len(app.session.messages) == 2
+            assert not app.user.IsWindowVisible(app.hwnd)
+            assert app.user.IsWindowVisible(app.notice), 'Completed answer popup did not appear'
+            assert app.user.GetForegroundWindow() == foreground, 'Completed answer popup took focus'
+            with patch('windows_native.time.monotonic', return_value=app.notice_until + .01):
+                app.update_notice()
+            assert not app.user.IsWindowVisible(app.notice), 'Completed answer popup did not expire'
+            report.update(completion_popup=True, completion_popup_expires=True,
+                          completion_popup_does_not_take_focus=True, panel_stays_hidden=True)
             assert 'copy và dán ngay' in calls[-1]['messages'][0]['content']
             assert calls[-1]['messages'][0]['content'] != native.CODE_PROMPT
             assert calls[-1]['thinking']['type'] == 'disabled'

@@ -169,11 +169,8 @@ class QuickAnswerTests(unittest.TestCase):
         app.window_proc(1, 0x8001, 0, (1 << 16) | 0x7B)
         app.menu.assert_called_once()
 
-    def test_completion_never_opens_overlay_and_retry_hotkey_never_opens_panel(self):
+    def test_retry_hotkey_never_opens_panel(self):
         app = WindowsApp.__new__(WindowsApp)
-        app.update_notice = Mock()
-        app.show_completion()
-        self.assertEqual(app.notice_until, 0)
         app.busy = False
         app.resend_session = Mock()
         app.show_panel = Mock()

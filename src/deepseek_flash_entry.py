@@ -12,6 +12,9 @@ if __name__ == "__main__":
         if '--verify-tk' in sys.argv:
             from verify_tk_runtime import run
             run(native.ROOT)
+        elif '--verify-popup' in sys.argv:
+            from verify_completion_popup import run
+            run(native.ROOT)
         elif '--verify-region' in sys.argv:
             from verify_region_capture import run
             run(native.ROOT)

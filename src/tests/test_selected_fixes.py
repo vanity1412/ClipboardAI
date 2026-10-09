@@ -31,6 +31,8 @@ class SelectedFixTests(unittest.TestCase):
         app.hwnd = 123
         app.user = Mock()
         app.user.GetForegroundWindow.return_value = 456
+        app.user.GetWindowLongPtrW.return_value = 0
+        app.user.GetWindowLongW.return_value = 0
         app.client = Mock()
         app.network = Mock()
         app.cancel_event = threading.Event()

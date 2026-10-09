@@ -148,6 +148,9 @@ class PickerFlowTests(unittest.TestCase):
         app.state = "Đang chờ"
         app.output_fingerprints = set()
         app.hwnd, app.user = 123, Mock()
+        app.user.GetForegroundWindow.return_value = 456
+        app.user.GetWindowLongPtrW.return_value = 0
+        app.user.GetWindowLongW.return_value = 0
         app.controls = {"mode": 124, "auto": 125}
         app.read_clipboard = Mock(return_value=("WA on test 4", 99))
         app.tooltip, app.refresh_panel, app.set_text = Mock(), Mock(), Mock()
@@ -163,18 +166,16 @@ class PickerFlowTests(unittest.TestCase):
             index = next(index for index, entry in enumerate(entries) if entry["id"] == first)
             app.pending_write = ("old pending", 20, None)
             app.user.TrackPopupMenu.return_value = 1001 + index
-            def work_area(action, param, rect, flags):
-                rect._obj.right, rect._obj.bottom = 1920, 1040
-                return True
-            app.user.SystemParametersInfoW.side_effect = work_area
-            app.window_proc(app.hwnd, 0x0312, 207, 0)
+            with patch('window_layout.work_area', return_value=(-1920, 0, 0, 1040)) as work:
+                app.window_proc(app.hwnd, 0x0312, 207, 0)
+            work.assert_called_once_with(hwnd=456)
             self.assertEqual(app.session.problem, "A. SUM & MORE\nBody")
             self.assertEqual(app.session.last_answer, "sum code")
             self.assertIsNone(app.pending_write)
             app.set_text.assert_any_call("answer", "sum code")
             app.start_request.assert_not_called()
             app.read_clipboard.assert_not_called()
-            self.assertEqual(app.user.TrackPopupMenu.call_args.args[1:4], (0x128, 1904, 1024))
+            self.assertEqual(app.user.TrackPopupMenu.call_args.args[1:4], (0x128, -16, 1024))
             self.assertTrue(any("SUM && MORE\t" in call.args[3] for call in app.user.AppendMenuW.call_args_list))
             app.user.DestroyMenu.assert_called_once()
 
@@ -183,7 +184,8 @@ class PickerFlowTests(unittest.TestCase):
             app = self.app(root)
             original = app.session.active_id
             app.user.TrackPopupMenu.return_value = 0
-            app.session_menu()
+            with patch('window_layout.work_area', return_value=(0, 0, 1920, 1040)):
+                app.session_menu()
             self.assertEqual(app.session.active_id, original)
             app.start_request.assert_not_called()
             app.set_text.assert_not_called()

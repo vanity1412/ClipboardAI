@@ -22,7 +22,7 @@ def panel_bounds(settings, work, outer_size=None):
     return x, y, width, height
 
 
-def work_area(fallback=(0, 0, 1920, 1040)):
+def work_area(fallback=(0, 0, 1920, 1040), hwnd=None):
     if os.name != 'nt':
         return fallback
     try:
@@ -30,13 +30,19 @@ def work_area(fallback=(0, 0, 1920, 1040)):
         class Info(ctypes.Structure):
             _fields_ = [('size', wintypes.DWORD), ('monitor', wintypes.RECT),
                         ('work', wintypes.RECT), ('flags', wintypes.DWORD)]
-        point = wintypes.POINT()
-        user.GetCursorPos(ctypes.byref(point))
-        user.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
-        user.MonitorFromPoint.restype = wintypes.HANDLE
+        if hwnd:
+            user.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+            user.MonitorFromWindow.restype = wintypes.HANDLE
+            monitor = user.MonitorFromWindow(hwnd, 2)
+        else:
+            point = wintypes.POINT()
+            user.GetCursorPos(ctypes.byref(point))
+            user.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+            user.MonitorFromPoint.restype = wintypes.HANDLE
+            monitor = user.MonitorFromPoint(point, 2)
         user.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Info)]
         info = Info(size=ctypes.sizeof(Info))
-        if user.GetMonitorInfoW(user.MonitorFromPoint(point, 2), ctypes.byref(info)):
+        if user.GetMonitorInfoW(monitor, ctypes.byref(info)):
             rect = info.work
             return rect.left, rect.top, rect.right, rect.bottom
     except (OSError, AttributeError):

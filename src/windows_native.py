@@ -453,6 +453,8 @@ def setup_winapi():
         (user, "UnregisterHotKey", [W.HWND, C.c_int], W.BOOL),
         (user, "ShowWindow", [W.HWND, C.c_int], W.BOOL),
         (user, "SetWindowTextW", [W.HWND, W.LPCWSTR], W.BOOL),
+        (user, "InvalidateRect", [W.HWND, C.POINTER(W.RECT), W.BOOL], W.BOOL),
+        (user, "UpdateWindow", [W.HWND], W.BOOL),
         (user, "GetWindowTextLengthW", [W.HWND], C.c_int),
         (user, "GetWindowTextW", [W.HWND, W.LPWSTR, C.c_int], C.c_int),
         (user, "SendMessageW", [W.HWND, W.UINT, W.WPARAM, W.LPARAM], C.c_ssize_t),
@@ -536,6 +538,8 @@ class WindowsApp:
         self.hotkey_errors = []
         self.notice_until = 0
         self.notice_text = None
+        self.notice_replay = False
+        self.menu_tracking = False
         self.last_tooltip = ""
         self.hover_window = None
         self.hover_visible = False
@@ -642,21 +646,22 @@ class WindowsApp:
             self.user.SetWindowTextW(self.controls[name], str(value))
 
     def create_notice(self):
-        # Transparent 48px checkmark only; no status box, focus or mouse capture.
+        # Layered + transparent makes the answer card click-through; NOACTIVATE
+        # preserves the browser's foreground window, including ordinary F11.
         self.notice = self.user.CreateWindowExW(0x080800A8, "STATIC", "", 0x80000000,
-            0, 0, 48, 48, None, None, self.instance, None)
+            0, 0, 480, 48, None, None, self.instance, None)
         if not self.notice:
             raise C.WinError(C.get_last_error())
         self.gdi = C.WinDLL("gdi32")
         self.gdi.CreateFontW.argtypes = [C.c_int] * 5 + [W.DWORD] * 8 + [W.LPCWSTR]
         self.gdi.CreateFontW.restype = W.HANDLE
-        self.check_font = self.gdi.CreateFontW(-34, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI Symbol")
+        self.notice_font = self.gdi.CreateFontW(-14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
         self.gdi.SelectObject.argtypes, self.gdi.SelectObject.restype = [W.HDC, W.HANDLE], W.HANDLE
         self.gdi.SetTextColor.argtypes = [W.HDC, W.DWORD]
         self.gdi.SetBkMode.argtypes = [W.HDC, C.c_int]
         self.gdi.DeleteObject.argtypes = [W.HANDLE]
         self.user.SetLayeredWindowAttributes.argtypes = [W.HWND, W.DWORD, W.BYTE, W.DWORD]
-        self.user.SetLayeredWindowAttributes(self.notice, 0xFFFFFF, 255, 1)
+        self.user.SetLayeredWindowAttributes(self.notice, 0, 255, 2)
         self.notice_callback = self.callback_type(self.notice_proc)
         set_window_long = window_long_setter(self.user)
         set_window_long.argtypes, set_window_long.restype = [W.HWND, C.c_int, C.c_ssize_t], C.c_ssize_t
@@ -665,6 +670,10 @@ class WindowsApp:
         self.user.SetWindowDisplayAffinity(self.notice, 0x11)
 
     def notice_proc(self, hwnd, msg, wp, lp):
+        if msg == 0x21:  # WM_MOUSEACTIVATE / MA_NOACTIVATE
+            return 3
+        if msg == 0x84:  # WM_NCHITTEST / HTTRANSPARENT
+            return -1
         if msg == 0x14:  # WM_ERASEBKGND
             return 1
         if msg == 0xF:  # WM_PAINT
@@ -675,33 +684,107 @@ class WindowsApp:
             self.user.BeginPaint.argtypes, self.user.BeginPaint.restype = [W.HWND, C.POINTER(Paint)], W.HDC
             self.user.EndPaint.argtypes = [W.HWND, C.POINTER(Paint)]
             self.user.FillRect.argtypes = [W.HDC, C.POINTER(W.RECT), W.HBRUSH]
+            self.user.FrameRect.argtypes = [W.HDC, C.POINTER(W.RECT), W.HBRUSH]
             self.user.GetSysColorBrush.argtypes, self.user.GetSysColorBrush.restype = [C.c_int], W.HBRUSH
             self.user.DrawTextW.argtypes = [W.HDC, W.LPCWSTR, C.c_int, C.POINTER(W.RECT), W.UINT]
             dc = self.user.BeginPaint(hwnd, C.byref(paint))
-            rect = W.RECT(0, 0, 48, 48)
-            self.gdi.GetStockObject.argtypes, self.gdi.GetStockObject.restype = [C.c_int], W.HANDLE
-            self.user.FillRect(dc, C.byref(rect), self.gdi.GetStockObject(0))  # WHITE_BRUSH / transparent key
-            old = self.gdi.SelectObject(dc, self.check_font)
-            self.gdi.SetTextColor(dc, 0x309030)
+            rect = W.RECT()
+            self.user.GetClientRect(hwnd, C.byref(rect))
+            self.user.FillRect(dc, C.byref(rect), self.user.GetSysColorBrush(5))
+            self.user.FrameRect(dc, C.byref(rect), self.user.GetSysColorBrush(16))
+            old = self.gdi.SelectObject(dc, self.notice_font)
+            from completion_popup import POPUP_LINE_HEIGHT, POPUP_TEXT_COLOR
+            self.gdi.SetTextColor(dc, POPUP_TEXT_COLOR)
             self.gdi.SetBkMode(dc, 1)
-            self.user.DrawTextW(dc, "✓", 1, C.byref(rect), 0x25)
+            for index, line in enumerate(getattr(self, 'notice_lines', [])):
+                line_rect = W.RECT(12, 10 + index * POPUP_LINE_HEIGHT,
+                                   max(12, rect.right - 12),
+                                   10 + (index + 1) * POPUP_LINE_HEIGHT)
+                self.user.DrawTextW(dc, line, -1, C.byref(line_rect), 0x8820)
             self.gdi.SelectObject(dc, old)
             self.user.EndPaint(hwnd, C.byref(paint))
             return 0
         return self.user.CallWindowProcW(C.c_void_p(self.old_notice_proc), hwnd, msg, wp, lp)
 
-    def show_completion(self):
-        # Background workflow: no completion overlay or automatic window.
-        self.notice_until = 0
+    def show_completion(self, answer=None):
+        replay = answer is not None
+        if answer is None:
+            display = self.display_state()
+            if display.phase != 'done':
+                return
+            answer = display.answer
+        if not getattr(self, 'notice', None) or self.self_test or not answer.strip():
+            return
+        from completion_popup import POPUP_SECONDS, POPUP_MAX_WIDTH, popup_rows, popup_bounds
+        from window_layout import work_area
+        work = work_area(hwnd=self.user.GetForegroundWindow())
+        width = min(POPUP_MAX_WIDTH, max(1, work[2] - work[0] - 24))
+        dc = self.user.GetDC(self.notice)
+        font = getattr(self, 'notice_font', None)
+        old = self.gdi.SelectObject(dc, font) if dc and font else None
+        self.gdi.GetTextExtentPoint32W.argtypes = [W.HDC, W.LPCWSTR, C.c_int, C.POINTER(W.SIZE)]
+        self.gdi.GetTextExtentPoint32W.restype = W.BOOL
+        def measure(value):
+            size = W.SIZE()
+            units = len(value.encode('utf-16-le')) // 2
+            if dc and self.gdi.GetTextExtentPoint32W(dc, value, units, C.byref(size)):
+                return size.cx
+            return len(value) * 9
+        try:
+            self.notice_lines = popup_rows(answer, measure, width)
+        finally:
+            if old:
+                self.gdi.SelectObject(dc, old)
+            if dc:
+                self.user.ReleaseDC(self.notice, dc)
+        self.notice_bounds = popup_bounds(work, width, len(self.notice_lines))
+        self.notice_text = '\r\n'.join(self.notice_lines)
+        self.notice_replay = replay
+        self.user.SetWindowTextW(self.notice, self.notice_text)
+        self.notice_until = time.monotonic() + POPUP_SECONDS
         self.update_notice()
+        self.user.InvalidateRect(self.notice, None, False)
+        self.user.UpdateWindow(self.notice)
 
     def update_notice(self):
-        if not getattr(self, "notice", None) or self.self_test:
+        if not getattr(self, "notice", None):
             return
-        if self.capture_pending or self.busy:
+        if getattr(self, 'menu_tracking', False):
             self.user.ShowWindow(self.notice, 0)
             return
-        self.user.ShowWindow(self.notice, 0)
+        if (self.self_test or self.capture_pending or (self.busy and not getattr(self, 'notice_replay', False)) or
+                getattr(self, 'region_pending', False) or getattr(self, 'exiting', False) or
+                time.monotonic() >= self.notice_until):
+            self.notice_until = 0
+            self.notice_replay = False
+            self.user.ShowWindow(self.notice, 0)
+            self.notice_lines = []
+            if self.notice_text:
+                self.notice_text = None
+                self.user.SetWindowTextW(self.notice, '')
+            return
+        # Reassert the topmost position while visible, without activation.
+        self.user.SetWindowPos(self.notice, W.HWND(-1), *self.notice_bounds, 0x10 | 0x40)
+
+    def track_popup_menu(self, menu, flags, x, y):
+        """Raise tool menus above ordinary fullscreen windows, then restore."""
+        self.hide_tray_result()
+        tracking_before = getattr(self, 'menu_tracking', False)
+        self.menu_tracking = True
+        self.update_notice()
+        owner_topmost = None
+        try:
+            getter = self.user.GetWindowLongPtrW if C.sizeof(C.c_void_p) == 8 else self.user.GetWindowLongW
+            getter.argtypes, getter.restype = [W.HWND, C.c_int], C.c_ssize_t
+            owner_topmost = bool(getter(self.hwnd, -20) & 0x8)
+            self.user.SetWindowPos(self.hwnd, W.HWND(-1), 0, 0, 0, 0, 0x13)
+            self.user.SetForegroundWindow(self.hwnd)
+            return self.user.TrackPopupMenu(menu, flags, x, y, 0, self.hwnd, None)
+        finally:
+            if owner_topmost is not None:
+                self.user.SetWindowPos(self.hwnd, W.HWND(-1 if owner_topmost else -2), 0, 0, 0, 0, 0x13)
+            self.menu_tracking = tracking_before
+            self.update_notice()
 
     def hide_tray_result(self):
         self.hover_visible = False
@@ -1288,6 +1371,7 @@ class WindowsApp:
             self.current_id += 1
             self.pending_write = None
             self.notice_until = 0
+            self.update_notice()
             self.last_request = self.session.last_request
             self.elapsed_done = 0
             self.pending_image = None
@@ -1335,11 +1419,9 @@ class WindowsApp:
                     ident = 1001 + index if offset == 0 else 20000 + index * 10 + offset
                     commands[ident] = (entry['id'], action)
                     self.user.AppendMenuW(submenu, 1 if self.busy else 0, ident, label)
-            rect = W.RECT()
-            if not self.user.SystemParametersInfoW(0x30, 0, C.byref(rect), 0):
-                return
-            self.user.SetForegroundWindow(self.hwnd)
-            choice = self.user.TrackPopupMenu(menu, 0x128, rect.right - 16, rect.bottom - 16, 0, self.hwnd, None)
+            from window_layout import work_area
+            work = work_area(hwnd=self.user.GetForegroundWindow())
+            choice = self.track_popup_menu(menu, 0x128, work[2] - 16, work[3] - 16)
             if choice in (201, 104):
                 if choice == 201:
                     self.send_clipboard()
@@ -1396,10 +1478,9 @@ class WindowsApp:
                     self.user.AppendMenuW(menu, 0x10, target, title + f' · {len(rows)} card')
             self.user.AppendMenuW(menu, 0, 5999, 'Thiết lập Wi-Fi trong Windows…')
             self.user.AppendMenuW(menu, 0, 5998, 'Mở card mạng để khôi phục thủ công…')
-            self.user.SetForegroundWindow(self.hwnd)
             point = W.POINT()
             self.user.GetCursorPos(C.byref(point))
-            choice = self.user.TrackPopupMenu(menu, 0x102, point.x, point.y, 0, self.hwnd, None)
+            choice = self.track_popup_menu(menu, 0x102, point.x, point.y)
             if choice in commands:
                 kind, ident = commands[choice]
                 self.start_network(kind, adapter_id=ident, show_picker='wifi' if kind == 'wifi_scan' else False)
@@ -1462,10 +1543,9 @@ class WindowsApp:
                 self.user.AppendMenuW(menu, flags, ident, label.replace('&', '&&'))
             self.user.AppendMenuW(menu, 0, 6998, 'Làm mới danh sách Wi-Fi')
             self.user.AppendMenuW(menu, 0, 6999, 'Thiết lập Wi-Fi trong Windows…')
-            self.user.SetForegroundWindow(self.hwnd)
             point = W.POINT()
             self.user.GetCursorPos(C.byref(point))
-            choice = self.user.TrackPopupMenu(menu, 0x102, point.x, point.y, 0, self.hwnd, None)
+            choice = self.track_popup_menu(menu, 0x102, point.x, point.y)
             if choice in commands:
                 row = commands[choice]
                 if row.get('connectable') and row.get('profile'):
@@ -1501,6 +1581,7 @@ class WindowsApp:
         self.capture_pending = False
         self.preview_answer = self.preview_request = ""
         self.elapsed_done = int(time.monotonic() - self.started) if self.started else 0
+        self.update_notice()
         self.state = "Đã hủy; sẵn sàng nhận F4/F8/F9"
         self.display_state().finish('cancelled', model_elapsed)
         self.tooltip(self.state)
@@ -1562,6 +1643,8 @@ class WindowsApp:
         if getattr(self, 'network_busy', False):
             raise RuntimeError('Đang chuyển mạng')
         self.hide_tray_result()
+        self.notice_until = 0
+        self.update_notice()
         self.region_token = getattr(self, 'region_token', 0) + 1
         token = self.region_token
         cancel = self.region_cancel = threading.Event()
@@ -1726,6 +1809,7 @@ class WindowsApp:
         self.last_action = action
         self.pending_write = None
         self.notice_until = 0
+        self.update_notice()
         self.preview_answer = ""
         self.region_clipboard_hold = False
         self.region_notice = ''
@@ -1794,6 +1878,7 @@ class WindowsApp:
         self.image_warning = ''
         self.notice_until = 0
         if hasattr(self, 'user'):
+            self.update_notice()
             self.hide_tray_result()
         self.last_request = self.session.last_request
         self.last_api_used = ''
@@ -2321,30 +2406,46 @@ class WindowsApp:
             self.copy_last_answer(current_session=True)
 
     def copy_last_answer(self, current_session=False):
-        """Explicitly copy a completed answer; never submit another AI request."""
+        """Copy and replay a completed answer without replacing a running turn."""
+        busy = getattr(self, 'busy', False)
+        feedback = ''
         answer = getattr(self.session, 'last_answer', '') if current_session else (
             getattr(self, 'last_completed_answer', '') or getattr(self.session, 'last_answer', ''))
         if not answer:
-            self.state = 'Chưa có đáp án hoàn tất để copy'
-            self.display_state().show_feedback(self.state)
+            feedback = 'Chưa có đáp án hoàn tất để copy'
+            if not busy:
+                self.state = feedback
+                self.display_state().show_feedback(feedback)
         else:
+            self.show_completion(answer)
             value = self.read_clipboard()
             if value is None:
-                self.state = 'Clipboard đang bận; nhấn F7 lại để copy đáp án'
-                self.display_state().show_feedback(self.state)
+                feedback = 'Clipboard đang bận; nhấn F7 lại để copy đáp án'
+                if not busy:
+                    self.state = feedback
+                    self.display_state().show_feedback(feedback)
             else:
                 self.region_clipboard_hold = False
                 self.region_notice = ''
                 self.pending_write = (answer, value[1], fingerprint(value[0]))
-                display = self.display_state()
-                display.feedback = ''
-                if display.phase != 'done' or display.answer != answer:
-                    display.finish('done', 0, answer, copy='pending')
-                else:
-                    display.copy = 'pending'
-                self.state = 'Đang copy đáp án hoàn tất gần nhất'
-        self.tooltip(self.state)
+                if not busy:
+                    display = self.display_state()
+                    display.feedback = ''
+                    if display.phase != 'done' or display.answer != answer:
+                        display.finish('done', 0, answer, copy='pending')
+                    else:
+                        display.copy = 'pending'
+                    self.state = 'Đang copy đáp án hoàn tất gần nhất'
+        self.tooltip(self.state + (' · ' + feedback if busy and feedback else ''))
         self.refresh_panel()
+
+    def copy_feedback(self, answer, status, message):
+        display = self.display_state()
+        matches = display.phase == 'done' and display.answer == answer
+        if not getattr(self, 'busy', False) and (matches or display.phase == 'idle'):
+            display.copy = status
+            self.state = message
+        self.tooltip(message)
 
     def write_clipboard(self, text, original_sequence, original_fingerprint=None):
         if not self.user.OpenClipboard(self.hwnd):
@@ -2354,9 +2455,8 @@ class WindowsApp:
                 # Any new clipboard event may contain images/files, even when its
                 # text is empty or unchanged. Recover explicitly with F7.
                 log_event("stale_answer_discarded")
-                self.state = "Đã có kết quả; clipboard đã đổi nên không ghi đè. F7 để copy lại."
-                self.display_state().copy = 'changed'
-                self.tooltip(self.state)
+                feedback = "Đã có kết quả; clipboard đã đổi nên không ghi đè. F7 để copy lại."
+                self.copy_feedback(text, 'changed', feedback)
                 return True
             data = text.encode("utf-16-le") + b"\x00\x00"
             handle = self.kernel.GlobalAlloc(0x42, len(data))
@@ -2375,12 +2475,10 @@ class WindowsApp:
                 raise C.WinError(C.get_last_error())
             self.own_sequence = self.user.GetClipboardSequenceNumber()
             log_event("answer_copied")
-            self.display_state().copy = 'copied'
-            self.state = ("Đã copy kết quả nhưng chưa lưu lịch sử; đừng thoát app."
-                          if getattr(getattr(self, "session", None), "error", "") else
-                          "Đã copy kết quả. F6 chọn phiên, F9 gửi phản hồi, F8 bài mới.")
-            self.tooltip(self.state)
-            self.show_completion()
+            feedback = ("Đã copy kết quả nhưng chưa lưu lịch sử; đừng thoát app."
+                        if getattr(getattr(self, "session", None), "error", "") else
+                        "Đã copy kết quả. F6 chọn phiên, F9 gửi phản hồi, F8 bài mới.")
+            self.copy_feedback(text, 'copied', feedback)
             return True
         finally:
             self.user.CloseClipboard()
@@ -2617,8 +2715,7 @@ class WindowsApp:
             self.user.AppendMenuW(menu, 0, 2, "Thoát")
             point = W.POINT()
             self.user.GetCursorPos(C.byref(point))
-            self.user.SetForegroundWindow(self.hwnd)
-            choice = self.user.TrackPopupMenu(menu, 0x100 | 2, point.x, point.y, 0, self.hwnd, None)
+            choice = self.track_popup_menu(menu, 0x100 | 2, point.x, point.y)
             if choice == 2:
                 self.request_exit()
             elif choice == 3:
@@ -2997,8 +3094,7 @@ class WindowsApp:
                     self.display_state().notice = warning
                 if self.session.auto_copy and self.enabled and job["sequence"] is not None:
                     self.pending_write = (answer, job["sequence"], job["digest"])
-                else:
-                    self.show_completion()
+                self.show_completion()
                 self.output_fingerprints.add(fingerprint(answer))
                 log_event("request_done", request_id=job["id"], elapsed=self.elapsed_done, session_saved=bool(saved))
             if getattr(self, 'panel_ready', False):
@@ -3006,14 +3102,14 @@ class WindowsApp:
                 self.set_text('problem_label', 'Ảnh đã đính kèm · Nhập câu hỏi về ảnh' if getattr(self, 'pending_image', None) else 'Câu hỏi · Enter gửi · Shift+Enter xuống dòng')
             self.tooltip(self.state)
         if self.pending_write and not getattr(self, 'region_pending', False) and not getattr(self, 'region_clipboard_hold', False):
+            copy_answer = self.pending_write[0]
             try:
                 if self.write_clipboard(*self.pending_write):
                     self.pending_write = None
             except OSError:
                 self.pending_write = None
-                self.state = "Đã có kết quả nhưng không copy được; chọn Copy kết quả ở tray"
-                self.display_state().copy = 'error'
-                self.tooltip(self.state)
+                feedback = "Đã có kết quả nhưng không copy được; chọn Copy kết quả ở tray"
+                self.copy_feedback(copy_answer, 'error', feedback)
         if stream_dirty and getattr(self, 'panel_ready', False):
             self.render_conversation()
         self.refresh_panel()
@@ -3128,7 +3224,7 @@ class WindowsApp:
                         self.gdi.DeleteObject(self.hover_font)
                 if getattr(self, "notice", None):
                     self.user.DestroyWindow(self.notice)
-                    self.gdi.DeleteObject(self.check_font)
+                    self.gdi.DeleteObject(self.notice_font)
                 for ident in self.hotkeys:
                     self.user.UnregisterHotKey(hwnd, ident)
                 self.user.RemoveClipboardFormatListener(hwnd)
