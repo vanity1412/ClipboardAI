@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import queue
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -19,16 +18,9 @@ import webbrowser
 MAX_RECORD = 32 * 1024 * 1024
 
 
-def codex_executable():
-    executable = shutil.which('codex.exe' if os.name == 'nt' else 'codex')
-    if executable:
-        return executable
-    if os.name == 'nt':
-        folder = Path(os.environ.get('LOCALAPPDATA', '')) / 'OpenAI' / 'Codex' / 'bin'
-        candidates = list(folder.glob('*/codex.exe'))
-        if candidates:
-            return str(max(candidates, key=lambda p: p.stat().st_mtime))
-    raise RuntimeError('OpenAI Browser cần Codex CLI chính thức. Cài theo https://developers.openai.com/codex/cli rồi mở lại app.')
+def codex_executable(cancel=None, deadline=None):
+    from codex_setup import ensure_codex
+    return ensure_codex(cancel=cancel, deadline=deadline)
 
 
 class BrowserSession:
@@ -51,7 +43,7 @@ class BrowserSession:
 
     def __enter__(self):
         self.check_wait(self.deadline)
-        executable = codex_executable()
+        executable = codex_executable(cancel=self.cancel, deadline=self.deadline)
         self.temporary = tempfile.TemporaryDirectory(prefix='ClipboardAI_Browser_')
         environment = os.environ.copy()
         environment['CODEX_HOME'] = str(self.home)

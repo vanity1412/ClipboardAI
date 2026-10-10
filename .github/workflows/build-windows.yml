@@ -41,6 +41,18 @@ jobs:
           $taskReport = Get-Content -LiteralPath dist/tk-verification.json -Raw | ConvertFrom-Json
           $taskReport | ConvertTo-Json
           if (-not $taskReport.ok -or -not $taskReport.frozen) { throw 'Packaged Tcl/Tk report is invalid' }
+      - name: Verify automatic Codex install without existing CLI or login
+        shell: pwsh
+        run: |
+          $taskExecutable = (Resolve-Path -LiteralPath dist/ClipboardAI.exe).Path
+          $taskProcess = Start-Process -FilePath $taskExecutable -ArgumentList '--verify-codex-setup' -WindowStyle Hidden -PassThru
+          if (-not $taskProcess.WaitForExit(240000)) {
+            Stop-Process -Id $taskProcess.Id -Force -ErrorAction SilentlyContinue
+            throw 'Packaged Codex setup verification timed out'
+          }
+          if ($taskProcess.ExitCode -ne 0) { throw 'Packaged Codex setup verification failed' }
+          $taskReport = Get-Content -LiteralPath dist/codex-setup-verification/report.json -Raw | ConvertFrom-Json
+          if (-not $taskReport.ok -or -not $taskReport.app_server_initialized -or $taskReport.login_requests -ne 0 -or $taskReport.inference_requests -ne 0) { throw 'Codex setup report is invalid' }
       - name: Upload executable and instructions
         uses: actions/upload-artifact@v6
         with:

@@ -9,7 +9,10 @@ if __name__ == "__main__":
     native.AIClient = CloudClient
     native.read_config = lambda: load_cloud_config(native.ROOT, load_defaults(native.ROOT))
     try:
-        if '--verify-tk' in sys.argv:
+        if '--verify-codex-setup' in sys.argv:
+            from verify_codex_setup import run
+            run(native.ROOT)
+        elif '--verify-tk' in sys.argv:
             from verify_tk_runtime import run
             run(native.ROOT)
         elif '--verify-agent-cursor' in sys.argv:
@@ -62,11 +65,14 @@ if __name__ == "__main__":
             run(native)
         else:
             app = native.WindowsApp("--self-test" in sys.argv)
+            if '--self-test' not in sys.argv:
+                from codex_setup import start_background
+                start_background(native.log_event)
             if '--open-zoo' in sys.argv:
                 app.command(220)
             app.run()
     except Exception as exc:
         native.log_event("startup_failed", error_type=type(exc).__name__)
-        if '--verify-agent-cursor' in sys.argv:
+        if '--verify-agent-cursor' in sys.argv or '--verify-codex-setup' in sys.argv:
             sys.exit(1)
         raise

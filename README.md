@@ -8,7 +8,11 @@ API Zoo có mẫu OpenAI, **OpenAI Browser/ChatGPT**, Claude, DeepSeek, Grok, Ge
 
 ## Bắt đầu
 
-1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi; không chạy cùng bản ClipboardAI cũ. App chạy bằng quyền người dùng thông thường. Windows chỉ hỏi UAC khi bạn chọn thao tác bật/tắt card mạng.
+Máy mới cần Windows 10/11 64-bit, quyền admin và Internet. Vào GitHub **Actions → Build Windows EXE → lượt build thành công mới nhất → Artifacts → ClipboardAI-Windows-x64**, tải ZIP rồi giải nén toàn bộ vào thư mục riêng. **Code → Download ZIP** chỉ tải mã nguồn. Giữ `ClipboardAI.exe`, `cua-driver.exe`, `cua-driver-uia.exe` và thư mục giấy phép cùng nhau. Python, Tcl/Tk, Pillow và SQLite đã được đóng gói; không cần cài Python hoặc Node.js.
+
+Máy mới chưa có tài khoản/model cấu hình: vào API Zoo để đăng nhập ChatGPT hoặc nhập API key, chọn model chữ và model ảnh. F2/F4 cần model hỗ trợ ảnh; đổi card mạng cần card Wi-Fi/LAN vật lý và driver Windows hoạt động. Kết nối Wi-Fi mới chưa lưu mật khẩu thực hiện qua Windows. Không chuyển API key mã hóa từ máy khác; nhập lại key hoặc đăng nhập trên máy mới.
+
+1. Mở `ClipboardAI.exe` trong thư mục có quyền ghi; không chạy cùng bản ClipboardAI cũ. EXE yêu cầu quyền admin ngay khi mở: chấp nhận UAC một lần cho mỗi lần khởi động để thao tác bật/tắt card mạng không hỏi lại trong phiên đó. Khi thiếu Codex CLI, EXE tự tải/cài nền bản chính thức vào `%LOCALAPPDATA%/ClipboardAI/codex-cli`, kiểm tra checksum và khả năng khởi động trước khi dùng; không cần Node.js. Cài CLI không tự đăng nhập ChatGPT.
 2. Chuột phải icon tray → Model / API / cài đặt → API Zoo. API Zoo là nơi thêm API, nhập key, chọn model và cấu hình API dự phòng. EXE không có key sẵn. Với ảnh, chọn model/API có hỗ trợ ảnh.
 3. Chọn mục đích `Hỏi đáp / phân tích` hoặc `Lập trình`; chọn prompt và mức suy luận riêng. Prompt có thể sửa/lưu từ menu.
 4. Copy câu hỏi → F8, hoặc đang xem câu hỏi/code → F4; chờ hoàn tất rồi Ctrl+V.
@@ -91,7 +95,7 @@ Nếu EXE cũ đang chạy và bị Windows khóa, build sang thư mục riêng:
 
 Build kiểm tra các tệp Tcl/Tk trước khi đóng gói. Nếu runtime bị thiếu hoặc môi trường build chặn quyền đọc, script dừng với lỗi thay vì tạo EXE thiếu cửa sổ chọn vùng/API Zoo/cài đặt phím. Dùng Python có Tcl/Tk và môi trường cho phép đọc các tệp runtime đó.
 
-EXE được kiểm tra manifest `asInvoker`, không yêu cầu quyền admin khi mở. Helper PowerShell riêng chỉ được nâng quyền cho thao tác mạng; mã helper được khóa chống sửa/thay thế cho tới khi thao tác và khôi phục kết thúc.
+EXE được kiểm tra manifest `requireAdministrator`, yêu cầu quyền admin ngay khi mở. Helper PowerShell chuyển card mạng kế thừa quyền admin của app để không hỏi UAC thêm trong cùng phiên; mã helper được khóa chống sửa/thay thế cho tới khi thao tác và khôi phục kết thúc.
 
 Kiểm tra chấp nhận cả tệp Tcl/Tk riêng và Tcl/Tk 9 nhúng dữ liệu trong DLL (`//zipfs:/`), nên không yêu cầu danh sách `data_files` phải khác rỗng trong trường hợp nhúng. Workflow kiểm tra thêm EXE bằng `--verify-tk`: khởi tạo Tk/ttk ẩn, xuất phiên bản và đường dẫn thư viện; không mở tray, gửi API hoặc thay clipboard.
 

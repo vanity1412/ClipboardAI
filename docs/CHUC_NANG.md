@@ -81,7 +81,7 @@ Danh sách API, model, card mạng và Wi-Fi phụ thuộc cấu hình và máy.
 
 F6 có **Hội thoại mới từ clipboard** và **Tạo phiên trống**. Mỗi phiên có **Chọn phiên**, **Mở chat**, **Gửi lại yêu cầu**, **Copy câu trả lời**, **Xóa ảnh đã thu thập**, **Lưu lại lịch sử**, **Xóa phiên**, **Ảnh & nội dung chat…**. Danh sách hiển thị tên và thời điểm cập nhật phiên. Menu tray cũng có quản lý ảnh của phiên hiện tại.
 
-Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã lưu/chưa lưu và trạng thái kết nối. Có **Làm mới danh sách** và **Thiết lập trong Windows**. Mạng chưa lưu chuyển sang Windows để nhập mật khẩu. EXE chạy bằng quyền người dùng thông thường; Windows chỉ hỏi UAC khi cần bật/tắt card mạng. Chọn card có thể tắt các card Wi-Fi/LAN khác. Đọc danh sách không nâng quyền. Có mục mở card mạng để khôi phục thủ công.
+Danh sách Wi-Fi theo SSID hiện tên mạng, phần trăm tín hiệu, đã lưu/chưa lưu và trạng thái kết nối. Có **Làm mới danh sách** và **Thiết lập trong Windows**. Mạng chưa lưu chuyển sang Windows để nhập mật khẩu. EXE yêu cầu quyền admin ngay khi mở; helper bật/tắt card kế thừa quyền để không hỏi UAC thêm trong cùng phiên. Chọn card có thể tắt các card Wi-Fi/LAN khác. Có mục mở card mạng để khôi phục thủ công.
 
 Nếu chuyển mạng lỗi, app khôi phục trạng thái bật/tắt và profile/SSID của các card Wi-Fi trước đó; Wi-Fi vốn chưa kết nối được đưa lại về trạng thái chưa kết nối. Nếu khôi phục không thành công, app giữ card mới bật và báo kiểm tra thủ công. Thoát trong lúc chuyển mạng gửi yêu cầu hủy và chờ khôi phục xong; tray tiếp tục hiện trạng thái để thao tác Windows không bị bỏ dở. Kiểm tra kết nối dùng HTTPS và proxy của người dùng, không gửi API key.
 

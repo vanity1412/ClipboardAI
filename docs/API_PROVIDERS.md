@@ -20,7 +20,7 @@ Endpoint custom là base URL, ví dụ `https://gateway.example/v1`, không thê
 
 ## OpenAI Browser
 
-1. Cài [Codex CLI chính thức](https://developers.openai.com/codex/cli), hoặc dùng CLI có sẵn trong ứng dụng Codex Windows. App tự tìm `codex.exe` trong PATH hoặc thư mục cài Codex trên Windows; không tự tải/cài CLI.
+1. Mở EXE: app tự tìm `codex.exe` trong PATH hoặc thư mục cài Codex Windows. Nếu thiếu, app tải nền bản CLI Windows x64 chính thức 0.162.1, kiểm tra SHA-256, giải nén và kiểm tra phiên bản trước khi dùng. Runtime riêng nằm tại `%LOCALAPPDATA%/ClipboardAI/codex-cli/0.162.1`; không cần Node.js, không sửa PATH và không cần quyền admin. Lần đầu cần Internet và dung lượng trống (bộ tải khoảng 165 MB). Nếu tải thất bại, app vẫn mở được; thao tác OpenAI Browser trong API Zoo thử cài lại và hiển thị lỗi nếu chưa thành công. Có thể [cài CLI thủ công](https://developers.openai.com/codex/cli).
 2. Chọn **OpenAI Browser · ChatGPT → Đăng nhập ChatGPT**. Hoàn tất đăng nhập trên trình duyệt trong tối đa 5 phút. Nút **Hủy**, đổi API hoặc đóng cửa sổ sẽ hủy thao tác đang chờ.
 3. Chọn model lấy được sau đăng nhập, chọn model đọc ảnh nếu cần, rồi **Lưu**. F8/F4/F9 dùng phiên này như những API khác. Quyền dùng model và giới hạn do gói ChatGPT/Codex quyết định.
 4. **Lấy lại model** kiểm tra phiên và tải model hiện tại; **Đăng xuất** đăng xuất phiên riêng của API đang chọn. Nếu CLI cũ không hỗ trợ app-server, cập nhật CLI theo hướng dẫn chính thức.
@@ -37,7 +37,7 @@ OpenAI-compatible, Anthropic Messages và Responses hỗ trợ chữ, ảnh và 
 
 Tự chuyển API có thể gửi cùng nội dung đến nhà cung cấp dự phòng đã bật. Hủy yêu cầu dừng chuyển API. Khi **Lưu** API Zoo trên Windows, key được bảo vệ bằng Windows DPAPI, gắn với tài khoản và máy hiện tại. Cấu hình API Zoo plaintext cũ được chuyển ở lần lưu thành công tiếp theo. Nếu chuyển máy/tài khoản và không giải mã được file, app giữ file gốc; đổi tên `api_zoo.json`, tạo lại cấu hình và nhập lại key. `.env`/`mirai_config.json` và phiên Browser lưu file có thể còn thông tin xác thực plaintext, cần giữ riêng khi chia sẻ thư mục app.
 
-App chạy bằng quyền người dùng thông thường. Chỉ helper chuyển card mạng được nâng quyền qua UAC; đăng nhập Browser và gửi yêu cầu AI không cần quyền admin.
+EXE yêu cầu quyền admin ngay khi khởi động để helper chuyển card mạng kế thừa quyền và không hỏi UAC lại trong cùng phiên. Cài CLI, đăng nhập Browser và gửi yêu cầu AI vốn không cần nâng quyền riêng. Nếu nhập thông tin của một tài khoản quản trị khác tại UAC, cấu hình/phiên lưu theo tài khoản chạy app đó.
 
 Kết nối API, streaming và kiểm tra HTTPS khi chuyển mạng dùng proxy đã cấu hình cho người dùng Windows hoặc `HTTPS_PROXY`, với ngoại lệ `NO_PROXY`. Không cần nâng quyền để sử dụng proxy. HTTP response báo lỗi vẫn có thể xác nhận đường kết nối mạng; nó không chứng minh API key/model/quota dùng được.
 
