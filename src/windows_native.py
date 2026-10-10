@@ -1255,7 +1255,7 @@ class WindowsApp:
         commands = {}
         try:
             self.user.AppendMenuW(menu, 1, 0, 'Chọn model → reasoning · mặc định medium')
-            for vision, title in ((False, 'Model trả lời'), (True, 'Model ảnh · F2/F4')):
+            for vision, title in ((False, 'Model trả lời'), (True, 'Model ảnh · API hiện tại')):
                 target = self.user.CreatePopupMenu()
                 count = 0
                 for p in profiles:
@@ -2700,7 +2700,8 @@ class WindowsApp:
                         instruction += '\nThông tin ảnh đính kèm: ' + warning + ' Không suy đoán nội dung ảnh đã thiếu.'
                     job['model_started'] = time.monotonic()
                     self.results.put(('model_started', job['id'], job['model_started']))
-                    answer, provider = self.client.ask(content, history, instruction=instruction)
+                    ask = self.client.ask_question if hasattr(type(self.client), 'ask_question') else self.client.ask
+                    answer, provider = ask(content, history, instruction=instruction)
                     try:
                         validate_unicode(answer)
                         if not isinstance(answer, str) or not answer.strip():

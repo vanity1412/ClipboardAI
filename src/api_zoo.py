@@ -109,6 +109,11 @@ def validate(data):
         row.update(provider=provider, timeout=timeout, max_tokens=tokens,
                    priority=priority, enabled=p.get('enabled', True), models=catalog,
                    reasoning_effort=effort, model_efforts=dict(efforts))
+        reader = p.get('question_reader')
+        if reader is not None:
+            if not isinstance(reader, dict) or set(reader) != {'api', 'model'} or not all(isinstance(v, str) and v for v in reader.values()) or len(reader['api']) > 64 or len(reader['model']) > 200 or any(c.isspace() for c in reader['model']):
+                raise ValueError('Model đọc ảnh riêng không hợp lệ')
+            row['question_reader'] = dict(reader)
         result.append(row)
     primary = data.get('primary', '')
     if not isinstance(primary, str) or primary and primary not in ids:
@@ -122,6 +127,7 @@ def consolidate(data):
     """One row per endpoint/credential, preserving the primary selection."""
     data = validate(data)
     groups, profiles, primary = {}, [], data['primary']
+    remapped = {}
     for p in sorted(data['profiles'], key=lambda p: p['priority']):
         identity = (p['base_url'], p['api_key'], p['provider'], p['id'] if p['provider'] == 'codex' else '')
         if identity not in groups:
@@ -132,18 +138,27 @@ def consolidate(data):
                 groups[identity]['name'] = 'Mirai'
             profiles.append(groups[identity])
         target = groups[identity]
+        remapped[p['id']] = target['id']
         target['enabled'] = target['enabled'] or p['enabled']
         if p['id'] == data['primary']:
             primary = target['id']
             target['model'], target['vision_model'] = p['model'], p['vision_model']
             target['timeout'], target['max_tokens'] = p['timeout'], p['max_tokens']
             target['reasoning_effort'] = p['reasoning_effort']
+            if 'question_reader' in p:
+                target['question_reader'] = copy.deepcopy(p['question_reader'])
+            else:
+                target.pop('question_reader', None)
         target['model_efforts'].update(p['model_efforts'])
         known = {m['id'] for m in target['models']}
         for m in p['models']:
             if m['id'] not in known:
                 target['models'].append(m)
                 known.add(m['id'])
+    for p in profiles:
+        if 'question_reader' in p:
+            ident = p['question_reader']['api']
+            p['question_reader']['api'] = remapped.get(ident, ident)
     return validate(dict(data, profiles=profiles, primary=primary))
 
 

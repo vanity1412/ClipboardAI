@@ -18,6 +18,23 @@ def model_choice(value, label):
     return value
 
 
+def image_options(profiles):
+    """Labels retain the owning API so a model never receives another API's key."""
+    options = {}
+    for p in profiles:
+        if not p['enabled']:
+            continue
+        models = [m['id'] for m in p['models'] if m['vision'] is not False]
+        if p['vision_model'] and p['vision_model'] not in models:
+            models.append(p['vision_model'])
+        for model in models:
+            label = p['name'] + ' · ' + model
+            if label in options:
+                label += ' [' + p['id'] + ']'
+            options[label] = {'api': p['id'], 'model': model}
+    return options
+
+
 def catalog_result(event, pending_token, selected_id, choices, edited_choices=(), preserve_empty_vision=False):
     """Keep valid metadata separate from a form the user may still be editing."""
     if event[0] != 'models' or event[1] != pending_token or event[2]['id'] != selected_id:
@@ -103,6 +120,7 @@ def _open_editor(window, root_path, config, results):
     form.columnconfigure(1, weight=1)
     model, vision = tk.StringVar(master=window), tk.StringVar(master=window)
     edited_choices, updating_choices = set(), [False]
+    reader_options = {}
     def choice_changed(field):
         if not updating_choices[0]:
             edited_choices.add(field)
@@ -118,7 +136,7 @@ def _open_editor(window, root_path, config, results):
     ttk.Label(form, text='Reasoning mặc định').grid(row=6, column=0, sticky='w', pady=3)
     from model_reasoning import LEVELS
     ttk.Combobox(form, name='effort', textvariable=effort, state='readonly', values=LEVELS).grid(row=6, column=1, sticky='ew', padx=(10, 0), pady=3)
-    ttk.Label(frame, text='Chọn gợi ý hoặc nhập ID model. Để trống model đọc ảnh nếu API chỉ hỗ trợ chữ.', wraplength=690).pack(anchor='w')
+    ttk.Label(frame, text='Model đọc ảnh: chọn API · model để đọc ảnh riêng rồi gửi chữ cho Model trả lời. Nhập ID model để dùng API hiện tại.', wraplength=690).pack(anchor='w')
     auth_bar = ttk.Frame(frame)
     auth_bar.pack(fill='x', pady=8)
     auto = tk.BooleanVar(master=window, value=data['auto'])
@@ -160,8 +178,13 @@ def _open_editor(window, root_path, config, results):
             selected[0] = uuid.uuid4().hex
         p['id'] = selected[0]
         p['name'] = p['name'] or urlsplit(p['base_url']).hostname or 'API'
+        reader = reader_options.get(vision.get())
         p.update(provider=protocol[0], model=model_choice(model.get(), 'Model trả lời'),
-                 vision_model=model_choice(vision.get(), 'Model đọc ảnh'), enabled=True, reasoning_effort=effort.get())
+                 vision_model=old.get('vision_model', '') if reader else model_choice(vision.get(), 'Model đọc ảnh'), enabled=True, reasoning_effort=effort.get())
+        if reader:
+            p['question_reader'] = dict(reader)
+        else:
+            p.pop('question_reader', None)
         if effort.get() != old.get('reasoning_effort', 'medium'):
             p['model_efforts'] = {}  # A changed profile default replaces quick-menu overrides.
         p.setdefault('priority', len(data['profiles']))
@@ -181,7 +204,9 @@ def _open_editor(window, root_path, config, results):
 
     def set_catalog(catalog, selected_model='', selected_vision=''):
         chooser['values'] = [m['id'] for m in catalog]
-        image_chooser['values'] = [m['id'] for m in catalog if m['vision'] is not False]
+        reader_options.clear()
+        reader_options.update(image_options(data['profiles']))
+        image_chooser['values'] = [m['id'] for m in catalog if m['vision'] is not False] + list(reader_options)
         updating_choices[0] = True
         try:
             model.set(selected_model)
@@ -218,6 +243,9 @@ def _open_editor(window, root_path, config, results):
         for k, variable in fields.items():
             variable.set(p[k])
         set_catalog(p['models'] or suggestions(preset.get()), p['model'], p['vision_model'])
+        reader = p.get('question_reader')
+        if reader:
+            vision.set(next((label for label, value in reader_options.items() if value == reader), reader['model']))
         auth_controls()
         status.set('Chọn/nhập model rồi Lưu. Dùng Lấy lại model để kiểm tra danh sách hiện tại.')
         if protocol[0] == 'codex' or not p['models']:
@@ -331,6 +359,9 @@ def _open_editor(window, root_path, config, results):
         if selected[0] is None:
             return
         data['profiles'] = [p for p in data['profiles'] if p['id'] != selected[0]]
+        for p in data['profiles']:
+            if p.get('question_reader', {}).get('api') == selected[0]:
+                p.pop('question_reader', None)
         if data['primary'] == selected[0]:
             data['primary'] = ''
         data['auto'] = auto.get()
@@ -399,8 +430,9 @@ def _open_editor(window, root_path, config, results):
                         browser_ready.discard(event[2]['id'])
                         status.set('Đã đăng xuất phiên ChatGPT của API này. Đăng nhập lại trước khi gửi.')
                         continue
+                    reader_label = vision.get() if vision.get() in reader_options else None
                     applied = catalog_result(event, pending[0], selected[0],
-                        {'model': model.get(), 'vision_model': vision.get()}, edited_choices,
+                        {'model': model.get(), 'vision_model': event[2]['vision_model'] if reader_label else vision.get()}, edited_choices,
                         preserve_empty_vision=any(old['id'] == event[2]['id'] for old in data['profiles']))
                     if applied is None:
                         continue
@@ -413,6 +445,8 @@ def _open_editor(window, root_path, config, results):
                     if not fields['name'].get():
                         fields['name'].set(p['name'])
                     set_catalog(p['models'], form_choices['model'], form_choices['vision_model'])
+                    if reader_label:
+                        vision.set(reader_label)
                     redraw()
                     status.set(f'Đã lấy {len(p["models"])} model. Danh sách không bảo đảm quota/quyền gọi; chọn model rồi Lưu.')
                 else:
