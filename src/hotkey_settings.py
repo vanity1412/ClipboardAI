@@ -2,10 +2,11 @@
 import re
 
 DEFAULTS = {201: 'F8', 202: 'F9', 203: 'F10', 204: 'F4', 207: 'F6',
-            209: 'F3', 213: 'Shift+F10', 214: 'Shift+F9', 215: 'F7', 217: 'Shift+F7'}
+            209: 'F3', 213: 'Shift+F10', 214: 'Shift+F9', 215: 'F7', 217: 'Shift+F7', 218: 'F2'}
 LABELS = {201: 'Gửi chữ: câu hỏi mới', 202: 'Gửi chữ bổ sung', 203: 'Hủy yêu cầu / chọn vùng',
           204: 'Chụp câu hỏi mới', 207: 'Quản lý phiên', 209: 'Chọn mạng (nhấn hai lần)',
-          213: 'Gửi lại yêu cầu', 214: 'Chụp ảnh bổ sung', 215: 'Copy đáp án gần nhất', 217: 'Copy đáp án phiên đang chọn'}
+          213: 'Gửi lại yêu cầu', 214: 'Chụp ảnh bổ sung', 215: 'Copy đáp án gần nhất', 217: 'Copy đáp án phiên đang chọn',
+          218: 'Agent tự làm trắc nghiệm (Cua MCP)'}
 MODIFIERS = {'ctrl': ('Ctrl', 2), 'alt': ('Alt', 1), 'shift': ('Shift', 4), 'win': ('Win', 8)}
 
 def parse_shortcut(text):
@@ -37,6 +38,12 @@ def normalized_shortcuts(overrides=None):
     if not isinstance(overrides, dict) or not set(overrides) <= {str(i) for i in DEFAULTS} | {'212'}:
         raise ValueError('Danh sách chức năng phím tắt không hợp lệ')
     selected = {str(i): parse_shortcut(overrides.get(str(i), default))[0] for i, default in DEFAULTS.items()}
+    # Preserve an older custom F2 binding when adding the new agent action.
+    if '218' not in overrides and selected['218'] in {v for k, v in selected.items() if k != '218'}:
+        used = {v for k, v in selected.items() if k != '218'}
+        selected['218'] = next(name for name in ('Ctrl+Alt+F2', 'Ctrl+Shift+F2', 'Alt+Shift+F2',
+            'Ctrl+Alt+Shift+F2', 'Ctrl+Alt+F1', 'Ctrl+Alt+F5', 'Ctrl+Alt+F11', 'Ctrl+Alt+F13',
+            'Ctrl+Alt+F14', 'Ctrl+Alt+F15', 'Ctrl+Alt+F16') if name not in used)
     if selected['215'] == 'Shift+F8':
         selected['215'] = 'F7'  # Upgrade the previous default; custom bindings stay.
     return selected

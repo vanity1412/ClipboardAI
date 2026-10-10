@@ -172,7 +172,7 @@ class HotkeyTests(unittest.TestCase):
         app.user.RegisterHotKey.return_value = True
         app.register_hotkeys()
         app.user.RegisterHotKey.assert_any_call(1, 209, 0x4000, 0x72)
-        self.assertEqual(len(app.hotkeys), 8)
+        self.assertEqual(len(app.hotkeys), 9)
         app.user.RegisterHotKey.assert_any_call(app.hwnd, 213, 0x4004, 0x79)
 
 

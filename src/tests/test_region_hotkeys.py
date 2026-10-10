@@ -308,7 +308,7 @@ class RegionHotkeyTests(unittest.TestCase):
             self.assertEqual(app.config['HOTKEYS'], {'201': 'Ctrl+Alt+S'})
             self.assertEqual(app.config['HOTKEYS_DISABLED'], ['209'])
             app.save_input_preferences.assert_not_called()
-            self.assertEqual(app.user.UnregisterHotKey.call_count, 8)
+            self.assertEqual(app.user.UnregisterHotKey.call_count, len(DEFAULTS) - 2)
             app.window_proc(app.hwnd, 0x0312, 201, 0)
             app.send_clipboard.assert_not_called()
 

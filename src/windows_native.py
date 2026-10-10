@@ -1561,6 +1561,8 @@ class WindowsApp:
             self.user.DestroyMenu(menu)
 
     def cancel_request(self):
+        if getattr(self, 'desktop_agent', None):
+            self.desktop_agent.interrupt()
         if getattr(self, 'region_pending', False):
             self.region_cancel.set()
             self.state = 'Đã hủy chọn vùng; clipboard và phiên giữ nguyên'
@@ -1588,6 +1590,77 @@ class WindowsApp:
         self.refresh_panel()
         if getattr(self, 'panel_ready', False):
             self.render_conversation()
+
+    def start_desktop_agent(self, client_factory=None):
+        if (self.busy or getattr(self, 'region_pending', False) or
+                getattr(self, 'network_busy', False) or getattr(self, 'exiting', False) or
+                getattr(getattr(self, 'agent_thread', None), 'is_alive', lambda: False)()):
+            self.state = 'Đang xử lý; chờ hoàn tất hoặc F10 dừng trước khi F2'
+            self.display_state().show_feedback(self.state)
+            self.tooltip(self.state)
+            log_event('desktop_agent_blocked', busy=bool(self.busy))
+            return
+        from copy import deepcopy
+        from cloud_client import CloudClient
+        from desktop_agent import DesktopAgent
+        from cua_mcp import executable
+        try:
+            executable(ROOT)
+            hwnd = self.user.GetForegroundWindow()
+            if not hwnd or hwnd == self.hwnd:
+                raise RuntimeError('Chọn cửa sổ đề trắc nghiệm rồi F2')
+            self.user.GetWindowThreadProcessId.argtypes = [W.HWND, C.POINTER(W.DWORD)]
+            self.user.GetWindowThreadProcessId.restype = W.DWORD
+            pid = W.DWORD()
+            self.user.GetWindowThreadProcessId(hwnd, C.byref(pid))
+            title = C.create_unicode_buffer(self.user.GetWindowTextLengthW(hwnd) + 1)
+            self.user.GetWindowTextW(hwnd, title, len(title))
+            config = deepcopy(reply_config(self.config, ANALYSIS))
+            if 'API_ZOO' in config:
+                config['API_ZOO']['auto'] = False
+            client = (client_factory or CloudClient)(config)
+            cancel = threading.Event()
+            client.cancel_event = cancel
+            self.current_id += 1
+            ident = self.current_id
+            self.desktop_agent = agent = DesktopAgent(ROOT, client, cancel,
+                lambda status: self.results.put(('agent_progress', ident, status)),
+                trace=lambda event, **fields: log_event('desktop_agent_' + event, request_id=ident, **fields))
+            self.busy = True
+            self.pending_write = None
+            self.notice_until = 0
+            self.update_notice()
+            self.started = time.monotonic()
+            self.display_state().begin(started=self.started, image=True)
+            self.state = 'Agent đang kết nối Cua Driver MCP · F10 dừng'
+            self.display_state().stage = self.state
+            self.tooltip(self.state)
+            log_event('desktop_agent_start', request_id=ident)
+            def run():
+                try:
+                    summary = agent.run(pid.value, title.value, hwnd)
+                    self.results.put(('agent_done', ident, summary))
+                    log_event('desktop_agent_done', request_id=ident)
+                except InterruptedError:
+                    self.results.put(('agent_cancelled', ident, 'Đã dừng agent'))
+                    log_event('desktop_agent_cancelled', request_id=ident)
+                except Exception as exc:
+                    # Never expose arbitrary provider/MCP bodies or log screenshots.
+                    message = str(exc) if isinstance(exc, (RuntimeError, TimeoutError)) else 'Agent gặp lỗi; kiểm tra Cua Driver và API Zoo'
+                    self.results.put(('agent_failed', ident, message[:350]))
+                    log_event('desktop_agent_failed', request_id=ident, phase=agent.phase,
+                              error_type=type(exc).__name__, error_code=getattr(exc, 'code', 'unknown'))
+                finally:
+                    self.results.put(('agent_stopped', ident, agent))
+            self.agent_thread = threading.Thread(target=run, daemon=True)
+            self.agent_thread.start()
+        except Exception as exc:
+            self.busy = False
+            self.desktop_agent = None
+            log_event('desktop_agent_start_failed', error_type=type(exc).__name__)
+            self.state = str(exc) if isinstance(exc, RuntimeError) else 'Không khởi động được Cua MCP'
+            self.display_state().show_feedback(self.state)
+            self.tooltip(self.state)
 
     def send_screenshot(self, hwnd=None, append=False):
         attempt_id = self.current_id
@@ -2166,6 +2239,8 @@ class WindowsApp:
                 self.pending_write = None
             self.session.save()
         elif ident == 103:
+            if getattr(self, 'desktop_agent', None):
+                self.cancel_request()
             self.enabled = not self.enabled
             self.pending_write = None
             if self.enabled:
@@ -2787,6 +2862,32 @@ class WindowsApp:
             except queue.Empty:
                 break
             kind = result[0]
+            if kind == 'agent_stopped':
+                if getattr(self, 'desktop_agent', None) is result[2]:
+                    self.desktop_agent = None
+                continue
+            if kind.startswith('agent_'):
+                if result[1] != self.current_id:
+                    continue
+                self.state = result[2]
+                if kind == 'agent_progress':
+                    self.display_state().stage = self.state
+                else:
+                    self.busy = False
+                    self.desktop_agent = None
+                    elapsed = int(time.monotonic() - self.started) if self.started else 0
+                    self.elapsed_done = elapsed
+                    if kind == 'agent_done':
+                        self.display_state().finish('done', elapsed, self.state, copy='manual')
+                        self.last_completed_answer = self.state
+                        self.show_completion()
+                    else:
+                        self.display_state().finish('cancelled' if kind == 'agent_cancelled' else 'failed',
+                                                    elapsed, error=self.state)
+                        if kind == 'agent_failed':
+                            self.display_state().show_feedback(self.state)
+                self.tooltip(self.state)
+                continue
             if kind == 'tools_closed':
                 self.tools_open = False
                 continue
@@ -3159,6 +3260,9 @@ class WindowsApp:
                     self.menu()
                 return 0
             if msg == 0x0312:
+                if wp == 203 and getattr(self, 'desktop_agent', None):
+                    self.cancel_request()
+                    return 0
                 if getattr(self, 'exiting', False) or getattr(self, 'hotkey_open', False) or not getattr(self, 'enabled', True):
                     return 0
                 shortcut_config = getattr(self, 'config', {})
@@ -3168,7 +3272,7 @@ class WindowsApp:
                     if wp == 203:
                         self.cancel_request()
                     return 0
-                log_event("hotkey", key=self.key_label(wp))
+                log_event("hotkey", key=self.key_label(wp), action_id=wp)
                 if wp == 201:
                     self.send_clipboard()
                 elif wp == 202:
@@ -3191,6 +3295,8 @@ class WindowsApp:
                     self.copy_last_answer()
                 elif wp == 217:
                     self.copy_last_answer(current_session=True)
+                elif wp == 218:
+                    self.start_desktop_agent()
                 return 0
             if msg == 5:
                 self.layout_panel()
@@ -3211,6 +3317,8 @@ class WindowsApp:
                 return 0
             if msg == 2:
                 self.closed.set()
+                if getattr(self, 'desktop_agent', None):
+                    self.desktop_agent.interrupt()
                 if getattr(self, 'region_pending', False):
                     self.region_cancel.set()
                 self.client.cancel()

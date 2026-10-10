@@ -15,6 +15,7 @@ API Zoo có mẫu OpenAI, **OpenAI Browser/ChatGPT**, Claude, DeepSeek, Grok, Ge
 
 | Phím | Hành vi |
 |---|---|
+| F2 | Agent tự đọc màn hình và chọn đáp án trắc nghiệm qua Cua Driver MCP; F10 dừng |
 | F8 | Gửi chữ clipboard thành câu hỏi mới |
 | F4 | Kéo chọn vùng trong cửa sổ hiện tại, thả chuột để gửi câu hỏi mới |
 | F9 | Gửi chữ bổ sung cho phiên hiện tại |
@@ -31,6 +32,16 @@ F4/F8 độc lập; F9/Shift+F9 dùng dữ kiện trước. Clipboard đổi tro
 F7 copy đáp án hoàn tất gần nhất và hiện lại chính đáp án đó trong popup khoảng 0,5 giây, kể cả khi yêu cầu mới đang chạy; không gọi AI lại hoặc đổi trạng thái xử lý. Shift+F7 copy và hiện đáp án phiên đang chọn. Muốn mở chat, chọn **Mở chat** trong menu tray; Esc trong ô nhập sẽ ẩn chat. Bộ phím mặc định còn lại được giữ nguyên, không áp một bộ phím riêng cho Chrome.
 
 ## Cài đặt phím tắt
+
+**Desktop Agent / F2:** mở cửa sổ đề trắc nghiệm rồi nhấn F2. Agent lấy cây giao diện và ảnh cửa sổ qua Cua Driver MCP, dùng model đọc ảnh đang chọn trong API Zoo để suy luận từng bước, chọn đáp án và cuộn/chuyển câu. Mỗi thao tác đều được theo sau bởi quan sát mới. F10 dừng phát thêm thao tác; Tạm dừng/Thoát cũng dừng agent. Agent dừng trước nút nộp bài để bạn kiểm tra và tự nộp. Không tự copy hoặc lưu ảnh/đề của lượt agent vào lịch sử.
+
+Giữ `cua-driver.exe` và `cua-driver-uia.exe` cạnh EXE. Build tải runtime chính thức phiên bản 0.34.1 từ wheel `cua-driver` và chép các file này cùng thông tin phiên bản/giấy phép. Khi chạy source, dùng `python scripts/setup_cua.py` một lần. F2 dùng một kết nối MCP stdio riêng; model trả quyết định JSON để app gọi tool MCP, không cần bật shell hay công cụ Codex trong luồng hỏi đáp. Chế độ này dùng model ảnh của API đang chọn, không tự chuyển API dự phòng; có giới hạn 360 bước/15 phút. Lỗi tạm thời được quan sát lại có giới hạn; trang đăng nhập hoặc lỗi kéo dài sẽ dừng và báo lý do.
+
+Với PDF chỉ đọc, F2 giải các câu nhìn đủ trên màn hình và hiển thị đáp án; tài liệu không có ô chọn thì không thể tự điền. Cuộn đến phần tiếp theo rồi F2 lại. F7 copy và hiện lại đáp án.
+
+F2 khóa vào cửa sổ đang chọn và quan sát lại sau từng bước; có thể đổi trang/web/tab trong cửa sổ đó. Khi đổi website, agent bỏ ngữ cảnh trang cũ. Nếu AI trả sai cấu trúc, phần tử đã thay đổi hoặc UIA không hỗ trợ, agent quan sát mới và thử sửa tối đa hai lần; không click khi thiếu đích, không phát lại thao tác có kết quả chưa rõ. Agent theo dõi cả nhóm radio ngoài vùng ảnh để tìm câu bị bỏ sót; trước khi báo hoàn tất phải kiểm tra nội dung phía dưới. Cuộn từng phần và chờ giao diện ổn định rồi mới đọc lại. Cửa sổ bị thu nhỏ sẽ chờ tối đa 30 giây để bạn mở lại, F10 vẫn dừng ngay. Nhật ký ghi số nhóm đã chọn/còn thiếu, mã lỗi và các lượt khôi phục. Con trỏ agent chỉ dùng mũi tên Windows hiện tại, không có vòng sáng, biểu tượng hay nhãn Cua; không thay đổi con trỏ thật hoặc lấy focus. Muốn chuyển sang cửa sổ khác, F10 rồi chọn cửa sổ mới và F2.
+
+Kiểm tra đường F2 và điều khiển với trang mẫu: `ClipboardAI.exe --verify-agent` dùng model giả lập; `ClipboardAI.exe --verify-agent-live` dùng model đã cấu hình thật (tối đa 8 lượt/150 giây). Cả hai dùng Chrome profile tạm riêng và kiểm tra đúng hai đáp án, chuyển câu và dừng trước Submit. Nhật ký `status.log` ghi các bước agent và loại lỗi, không ghi ảnh/đề hoặc khóa. Độ đúng khi giải và khả năng nhận diện giao diện thực tế vẫn phụ thuộc model và website.
 
 Chuột phải icon tray → **Model / API / cài đặt → Cài đặt phím tắt…**. Hoặc mở **Cài đặt / kiểm tra kết nối**, bấm nút **Cài đặt phím tắt**.
 
@@ -113,3 +124,5 @@ Chat và các bảng ảnh/hội thoại mặc định 420 × 560 px, mở ở g
 `src/`: ứng dụng và test. `scripts/run_tests.py`: chạy test không gọi API thật. `build.ps1`: đóng gói EXE kèm Tkinter cho API Zoo/prompt editor. `.github/workflows/build-windows.yml`: build tự động. `requirements*.txt`: dependency đã cố định phiên bản.
 
 Cửa sổ **Ảnh & nội dung chat của phiên…** có tab ảnh và tab nội dung hội thoại cùng phiên, kèm nút mở chat để hỏi tiếp. Menu copy theo phiên có mũi tên; chọn tên phiên sẽ chuyển phiên và copy đáp án cuối của phiên đó, không gọi AI. F7 copy đáp án gần nhất, Shift+F7 copy phiên đang chọn; F8 vẫn gửi bài mới.
+
+Thử cuộn trang dài bằng `ClipboardAI.exe --verify-agent-long-controlled`: sáu câu trên một trang nhiều màn hình, kiểm tra độc lập tất cả đáp án, đã cuộn đến cuối và chưa nộp. Chế độ này dùng model giả lập; thử model thật từ source bằng `verify_desktop_agent.run(..., model="live", layout="long", questions=6)`.

@@ -47,6 +47,10 @@ jobs:
           name: ClipboardAI-Windows-x64
           path: |
             dist/ClipboardAI.exe
+            dist/cua-driver.exe
+            dist/cua-driver-uia.exe
+            dist/CUA_VERSION.txt
+            dist/cua-licenses/**
             dist/README.md
             dist/CHUC_NANG.md
             dist/API_PROVIDERS.md

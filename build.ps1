@@ -11,11 +11,19 @@ try {
     # inaccessible Tcl/Tk runtime. Fail before producing an EXE without its UI.
     python scripts/check_tk_runtime.py
     if ($LASTEXITCODE -ne 0) { throw 'Build requires readable Tcl/Tk runtime files for region capture, API Zoo and hotkey settings' }
+    python scripts/setup_cua.py
+    if ($LASTEXITCODE -ne 0) { throw 'Cua Driver MCP runtime setup failed' }
     python -m PyInstaller --noconfirm --clean --onefile --windowed --hidden-import tkinter --hidden-import _tkinter --name $Name --distpath $OutputDirectory --workpath build/work --specpath build src/deepseek_flash_entry.py
     if ($LASTEXITCODE -ne 0) { throw 'Build EXE failed' }
     $taskExecutable = Join-Path $OutputDirectory ($Name + '.exe')
     python -c "import sys, xml.etree.ElementTree as ET; from PyInstaller.utils.win32.winmanifest import read_manifest_from_executable; root = ET.fromstring(read_manifest_from_executable(sys.argv[1])); level = root.find('.//{urn:schemas-microsoft-com:asm.v3}requestedExecutionLevel'); assert level is not None and level.get('level') == 'asInvoker', 'EXE must run with normal user privileges'; print('EXE normal-user manifest: OK')" $taskExecutable
     if ($LASTEXITCODE -ne 0) { throw 'EXE normal-user manifest verification failed' }
+    Copy-Item -LiteralPath 'build/cua-runtime/cua-driver.exe' -Destination (Join-Path $OutputDirectory 'cua-driver.exe') -Force
+    Copy-Item -LiteralPath 'build/cua-runtime/cua-driver-uia.exe' -Destination (Join-Path $OutputDirectory 'cua-driver-uia.exe') -Force
+    Copy-Item -LiteralPath 'build/cua-runtime/CUA_VERSION.txt' -Destination (Join-Path $OutputDirectory 'CUA_VERSION.txt') -Force
+    if (Test-Path -LiteralPath 'build/cua-runtime/cua-licenses') {
+        Copy-Item -LiteralPath 'build/cua-runtime/cua-licenses' -Destination $OutputDirectory -Recurse -Force
+    }
     Copy-Item -LiteralPath README.md -Destination (Join-Path $OutputDirectory 'README.md') -Force
     Copy-Item -LiteralPath docs/CHUC_NANG.md -Destination (Join-Path $OutputDirectory 'CHUC_NANG.md') -Force
     Copy-Item -LiteralPath docs/API_PROVIDERS.md -Destination (Join-Path $OutputDirectory 'API_PROVIDERS.md') -Force

@@ -12,6 +12,22 @@ if __name__ == "__main__":
         if '--verify-tk' in sys.argv:
             from verify_tk_runtime import run
             run(native.ROOT)
+        elif '--verify-agent-cursor' in sys.argv:
+            from verify_agent_cursor import run
+            run(native.ROOT)
+        elif '--verify-agent-long-controlled' in sys.argv:
+            from verify_desktop_agent import run
+            run(native.ROOT / 'agent-long-controlled-verification', config_root=native.ROOT,
+                require_foreground=False, questions=6, layout='long', max_seconds=240)
+        elif '--verify-agent-live' in sys.argv:
+            from verify_desktop_agent import run
+            run(native.ROOT / 'agent-live-verification', model='live', config_root=native.ROOT)
+        elif '--verify-agent-controlled' in sys.argv:
+            from verify_desktop_agent import run
+            run(native.ROOT / 'agent-controlled-verification', config_root=native.ROOT, require_foreground=False)
+        elif '--verify-agent' in sys.argv:
+            from verify_desktop_agent import run
+            run(native.ROOT)
         elif '--verify-popup' in sys.argv:
             from verify_completion_popup import run
             run(native.ROOT)
@@ -51,4 +67,6 @@ if __name__ == "__main__":
             app.run()
     except Exception as exc:
         native.log_event("startup_failed", error_type=type(exc).__name__)
+        if '--verify-agent-cursor' in sys.argv:
+            sys.exit(1)
         raise

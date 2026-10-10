@@ -6,11 +6,12 @@ Hai tên EXE dùng cùng mã nguồn trong `src`. Bảng dưới là bộ phím 
 
 | Phím/thao tác | Chức năng |
 |---|---|
+| F2 | Agent quan sát cửa sổ, suy luận và tự chọn đáp án trắc nghiệm qua Cua Driver MCP |
 | F8 | Gửi chữ clipboard thành câu hỏi mới, không dùng lịch sử trước |
 | F4 | Kéo chọn vùng ảnh thành câu hỏi mới; có thể đổi sang chụp cả cửa sổ |
 | F9 | Gửi chữ clipboard để hỏi tiếp/bổ sung vào phiên hiện tại |
 | Shift+F9 | Chọn vùng ảnh bổ sung vào phiên hiện tại |
-| F10 | Hủy yêu cầu AI hoặc chọn vùng; không copy đáp án dở |
+| F10 | Hủy yêu cầu AI, chọn vùng hoặc dừng agent; không phát thêm thao tác |
 | Shift+F10 | Gửi lại yêu cầu đã lưu, không đọc câu hỏi mới từ clipboard |
 | F7 | Copy và hiện popup đáp án hoàn tất gần nhất trong khoảng 0,5 giây, không gọi AI lại |
 | Shift+F7 | Copy và hiện popup đáp án của phiên đang chọn |
@@ -24,6 +25,12 @@ Hai tên EXE dùng cùng mã nguồn trong `src`. Bảng dưới là bộ phím 
 | AI trả lời hoàn tất | Tự hiện đáp án gọn ở góc dưới bên phải màn hình đang dùng khoảng 0,5 giây |
 
 ## Menu chuột phải icon tray
+
+**Agent F2:** chọn cửa sổ website trắc nghiệm rồi F2. Agent dùng model đọc ảnh của API đang chọn trong API Zoo; quan sát mới sau từng thao tác, chọn đáp án và cuộn/chuyển câu đến khi hoàn tất. Dừng trước nút nộp bài để người dùng kiểm tra. F10, Tạm dừng và Thoát đều dừng agent. Model ảnh, độ rõ của đề và cấu trúc website quyết định khả năng xử lý; khi thiếu dữ kiện hoặc driver từ chối, agent dừng và báo lý do. Với PDF chỉ đọc, F2 trả đáp án các câu nhìn đủ; cuộn rồi F2 để giải phần tiếp theo, F7 copy/hiện lại. Không có ô chọn thì không tự điền vào PDF.
+
+F2 giữ cửa sổ đã chọn, dùng được nhiều trang/web/tab bên trong cửa sổ đó. Agent quan sát lại sau mỗi bước; lỗi định dạng AI, phần tử cũ hoặc đường UIA không hỗ trợ được thử sửa tối đa hai lần bằng quan sát mới. Lệnh click thiếu đích được chặn trước khi gửi driver. Đổi website sẽ bỏ ngữ cảnh trang cũ. Theo dõi nhóm radio chưa chọn cả ngoài vùng ảnh; không chấp nhận báo hoàn tất khi còn nhóm chưa làm. Cuộn từng phần, đợi giao diện ổn định và kiểm tra phần dưới trước khi kết thúc. Cửa sổ bị thu nhỏ sẽ chờ tối đa 30 giây để mở lại, không tự chuyển cửa sổ; F10 vẫn dừng. Con trỏ hiển thị chỉ là mũi tên Windows hiện tại, không có hiệu ứng/nhãn Cua và không giữ focus hay chặn click. Nó được đóng khi agent kết thúc. Chuyển sang cửa sổ khác: F10, chọn cửa sổ mới rồi F2.
+
+Runtime `cua-driver.exe` và `cua-driver-uia.exe` phải nằm cạnh EXE. Build tự chuẩn bị Cua Driver0.34.1 chính thức bằng `scripts/setup_cua.py`. Giao tiếp MCP qua stdin/stdout riêng, không mở cổng mạng. Lượt agent không lưu ảnh/đề vào lịch sử và không tự ghi clipboard; giới hạn360 bước/15 phút, không tự chuyển API dự phòng. F2 có thể đổi/tắt trong Cài đặt phím tắt như các phím khác.
 
 ```text
 ClipboardAI
