@@ -4,7 +4,7 @@ import re
 DEFAULTS = {201: 'F8', 202: 'F9', 203: 'F10', 204: 'F4', 207: 'F6',
             209: 'F3', 213: 'Shift+F10', 214: 'Shift+F9', 215: 'F7', 217: 'Shift+F7', 218: 'F2'}
 LABELS = {201: 'Gửi chữ: câu hỏi mới', 202: 'Gửi chữ bổ sung', 203: 'Hủy yêu cầu / chọn vùng',
-          204: 'Chụp câu hỏi mới', 207: 'Quản lý phiên', 209: 'Chọn mạng (nhấn hai lần)',
+          204: 'Chụp câu hỏi mới', 207: 'Quản lý phiên', 209: 'Model/reasoning; nhấn hai lần chọn mạng',
           213: 'Gửi lại yêu cầu', 214: 'Chụp ảnh bổ sung', 215: 'Copy đáp án gần nhất', 217: 'Copy đáp án phiên đang chọn',
           218: 'Agent tự làm trắc nghiệm (Cua MCP)'}
 MODIFIERS = {'ctrl': ('Ctrl', 2), 'alt': ('Alt', 1), 'shift': ('Shift', 4), 'win': ('Win', 8)}

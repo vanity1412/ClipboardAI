@@ -114,6 +114,7 @@ class HotkeyTests(unittest.TestCase):
         app.enabled = True
         app.config = {}
         app.network_press = DoublePress()
+        app.user, app.hwnd = Mock(), 1
         app.network = Mock()
         app.network.perform.return_value = {'ok': True, 'message': 'Đã chuyển sang LAN'}
         app.results = queue.Queue()
@@ -126,8 +127,19 @@ class HotkeyTests(unittest.TestCase):
         with patch('windows_native.time.monotonic', side_effect=[1, 1.2]), patch('windows_native.log_event'):
             app.window_proc(1, 0x0312, 209, 0)
             app.open_network_picker.assert_not_called()
+            app.user.SetTimer.assert_called_once_with(1, 3, 520, None)
             app.window_proc(1, 0x0312, 209, 0)
             app.open_network_picker.assert_called_once_with()
+            app.user.KillTimer.assert_called_once_with(1, 3)
+
+    def test_single_f3_timer_opens_model_picker_not_network(self):
+        app = self.app()
+        app.quick_model_menu, app.open_network_picker = Mock(), Mock()
+        app.network_press.previous = 1
+        app.window_proc(1, 0x0113, 3, 0)
+        app.quick_model_menu.assert_called_once_with()
+        app.open_network_picker.assert_not_called()
+        self.assertIsNone(app.network_press.previous)
 
     def test_ai_busy_paused_and_network_busy_block_switch(self):
         app = self.app()

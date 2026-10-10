@@ -103,6 +103,8 @@ class CloudClient(DeepSeekClient):
             config = self.config
             def call(candidate, vision):
                 selected = candidate['vision_model'] if vision else candidate['model']
+                from model_reasoning import effort_for
+                effort = effort_for(candidate, selected)
                 if candidate['provider'] == 'codex':
                     from browser_provider import BrowserSession
                     _, timeout = limits(config, candidate['max_tokens'], candidate['timeout'])
@@ -118,7 +120,7 @@ class CloudClient(DeepSeekClient):
                     try:
                         with BrowserSession(candidate, config.get('BROWSER_AUTH_ROOT'), self.cancel_event,
                                             deadline=deadline) as browser:
-                            answer = browser.ask(selected, request_messages(text, history, instruction), timeout, getattr(self, 'on_stream', None))
+                            answer = browser.ask(selected, request_messages(text, history, instruction), timeout, getattr(self, 'on_stream', None), effort=effort)
                     except Exception as exc:
                         error = exc
                         raise
@@ -128,7 +130,7 @@ class CloudClient(DeepSeekClient):
                             stats.record(candidate['name'], selected, getattr(self, 'activity_phase', 'Trả lời'), started, error=error)
                     return answer, candidate['name'] + ': ' + selected
                 if candidate['provider'] == 'deepseek' and selected in ('deepseek-flash', 'deepseek-v4-pro'):
-                    self.config = dict(config, DEEPSEEK_MODEL=selected, DEEPSEEK_API_KEY=candidate['api_key'],
+                    self.config = dict(config, ZOO_REASONING_EFFORT=effort, DEEPSEEK_MODEL=selected, DEEPSEEK_API_KEY=candidate['api_key'],
                                        DEEPSEEK_MAX_TOKENS=str(candidate['max_tokens']), DEEPSEEK_TIMEOUT_S=str(candidate['timeout']))
                     try:
                         answer, _ = super(CloudClient, self).ask(text, history, instruction, json_output)
@@ -139,6 +141,8 @@ class CloudClient(DeepSeekClient):
                     tokens, timeout = limits(config, candidate['max_tokens'], candidate['timeout'])
                     protocol = candidate['provider']
                     body = request_body(protocol, selected, request_messages(text, history, instruction), tokens, self.cancel_event is not None)
+                    from model_reasoning import apply_effort
+                    apply_effort(body, protocol, selected, effort)
                     route = {'anthropic': '/messages', 'responses': '/responses'}.get(protocol, '/chat/completions')
                     options = {'protocol': protocol} if protocol in ('anthropic', 'responses') else {}
                     data = self.post(candidate['base_url'] + route, body, timeout, key=candidate['api_key'], **options)

@@ -58,8 +58,8 @@ def _open_editor(window, root_path, config, results):
     import tkinter as tk
     from tkinter import ttk, messagebox
     window.title('API Zoo')
-    window.geometry('740x580')
-    window.minsize(650, 570)
+    window.geometry('740x620')
+    window.minsize(650, 610)
     from window_layout import place_tk
     place_tk(window, config, keep_size=True)
     local = queue.Queue()
@@ -114,6 +114,10 @@ def _open_editor(window, root_path, config, results):
     ttk.Label(form, text='Model đọc ảnh').grid(row=5, column=0, sticky='w', pady=3)
     image_chooser = ttk.Combobox(form, name='vision', textvariable=vision, state='normal')
     image_chooser.grid(row=5, column=1, sticky='ew', padx=(10, 0), pady=3)
+    effort = tk.StringVar(master=window, value='medium')
+    ttk.Label(form, text='Reasoning mặc định').grid(row=6, column=0, sticky='w', pady=3)
+    from model_reasoning import LEVELS
+    ttk.Combobox(form, name='effort', textvariable=effort, state='readonly', values=LEVELS).grid(row=6, column=1, sticky='ew', padx=(10, 0), pady=3)
     ttk.Label(frame, text='Chọn gợi ý hoặc nhập ID model. Để trống model đọc ảnh nếu API chỉ hỗ trợ chữ.', wraplength=690).pack(anchor='w')
     auth_bar = ttk.Frame(frame)
     auth_bar.pack(fill='x', pady=8)
@@ -157,7 +161,9 @@ def _open_editor(window, root_path, config, results):
         p['id'] = selected[0]
         p['name'] = p['name'] or urlsplit(p['base_url']).hostname or 'API'
         p.update(provider=protocol[0], model=model_choice(model.get(), 'Model trả lời'),
-                 vision_model=model_choice(vision.get(), 'Model đọc ảnh'), enabled=True)
+                 vision_model=model_choice(vision.get(), 'Model đọc ảnh'), enabled=True, reasoning_effort=effort.get())
+        if effort.get() != old.get('reasoning_effort', 'medium'):
+            p['model_efforts'] = {}  # A changed profile default replaces quick-menu overrides.
         p.setdefault('priority', len(data['profiles']))
         p.setdefault('timeout', 0)
         p.setdefault('max_tokens', 0)
@@ -186,6 +192,7 @@ def _open_editor(window, root_path, config, results):
 
     def choose_preset(_=None):
         invalidate()
+        effort.set('medium')
         label = preset.get()
         protocol[0], endpoint, _, _ = PRESETS[label]
         fields['name'].set(label)
@@ -206,6 +213,7 @@ def _open_editor(window, root_path, config, results):
         selected[0] = p['id']
         credential_host[0] = urlsplit(p['base_url']).hostname
         protocol[0] = p['provider']
+        effort.set(p.get('reasoning_effort', 'medium'))
         preset.set(preset_for(p))
         for k, variable in fields.items():
             variable.set(p[k])

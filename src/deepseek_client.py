@@ -102,6 +102,10 @@ class DeepSeekClient(AIClient):
             body.pop("reasoning_effort")
         elif self.config.get("REPLY_MODE") == ANALYSIS:
             body["reasoning_effort"] = "high"
+        effort = self.config.get('ZOO_REASONING_EFFORT')
+        if effort and effort != 'default':
+            body['thinking'] = {'type': 'enabled'}
+            body['reasoning_effort'] = 'high' if effort in ('low', 'medium') else effort
         if json_output:
             body["response_format"] = {"type": "json_object"}
         started = time.monotonic()

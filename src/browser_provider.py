@@ -180,6 +180,11 @@ class BrowserSession:
                     raise ValueError('Codex trả ID model không hợp lệ')
                 modalities = model.get('inputModalities')
                 catalog.append({'id': ident, 'vision': 'image' in modalities if isinstance(modalities, list) else None})
+                supported = model.get('supportedReasoningEfforts')
+                if isinstance(supported, list):
+                    from model_reasoning import LEVELS
+                    catalog[-1]['reasoning_efforts'] = [item['reasoningEffort'] for item in supported
+                        if isinstance(item, dict) and item.get('reasoningEffort') in LEVELS and item['reasoningEffort'] != 'default']
             cursor = response.get('nextCursor')
             if not cursor:
                 break
@@ -216,7 +221,7 @@ class BrowserSession:
     def logout(self):
         self.request('account/logout', {})
 
-    def ask(self, model, messages, timeout, callback=None):
+    def ask(self, model, messages, timeout, callback=None, effort='medium'):
         deadline = time.monotonic() + timeout if timeout else None
         def remaining():
             if deadline is None:
@@ -252,7 +257,13 @@ class BrowserSession:
                         raise ValueError('Nội dung không hỗ trợ trong OpenAI Browser')
         if callback:
             callback(None)
-        turn = self.request('turn/start', dict(threadId=thread_id, input=inputs), remaining())
+        params = dict(threadId=thread_id, input=inputs)
+        if effort != 'default':
+            from model_reasoning import LEVELS
+            if effort not in LEVELS:
+                raise ValueError('Reasoning effort không hợp lệ')
+            params['effort'] = effort
+        turn = self.request('turn/start', params, remaining())
         turn_id = turn['turn']['id']
         answers, total = {}, 0
         while True:

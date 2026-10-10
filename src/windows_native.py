@@ -1237,7 +1237,69 @@ class WindowsApp:
 
     def network_hotkey(self):
         if self.network_press.press(time.monotonic()):
+            self.user.KillTimer(self.hwnd, 3)
             self.open_network_picker()
+        else:
+            self.user.SetTimer(self.hwnd, 3, 520, None)
+
+    def quick_model_menu(self):
+        if self.busy or getattr(self, 'network_busy', False) or getattr(self, 'probe_busy', False) or not self.enabled:
+            return
+        from model_reasoning import choices, effort_for, select_model
+        from api_zoo import ZooStore, apply_config, ZooRouter
+        data = self.config.get('API_ZOO', {})
+        profiles = [p for p in data.get('profiles', []) if p['enabled']]
+        menu = self.user.CreatePopupMenu()
+        if not menu:
+            return
+        commands = {}
+        try:
+            self.user.AppendMenuW(menu, 1, 0, 'Chọn model → reasoning · mặc định medium')
+            for vision, title in ((False, 'Model trả lời'), (True, 'Model ảnh · F2/F4')):
+                target = self.user.CreatePopupMenu()
+                count = 0
+                for p in profiles:
+                    field = 'vision_model' if vision else 'model'
+                    catalog = list(p.get('models', []))
+                    if p.get(field) and p[field] not in {m['id'] for m in catalog}:
+                        catalog.insert(0, {'id': p[field], 'vision': None})
+                    for model in catalog:
+                        if vision and model.get('vision') is False:
+                            continue
+                        submenu = self.user.CreatePopupMenu()
+                        selected = p['id'] == data.get('primary') and p.get(field) == model['id']
+                        for level in choices(p, model['id']):
+                            ident = 7001 + len(commands)
+                            commands[ident] = (p['id'], model['id'], level, vision)
+                            label = 'Mặc định nhà cung cấp' if level == 'default' else level
+                            self.user.AppendMenuW(submenu, 8 if selected and effort_for(p, model['id']) == level else 0, ident, label)
+                        label = p['name'] + ' · ' + model['id']
+                        self.user.AppendMenuW(target, 0x10 | (8 if selected else 0), submenu, label.replace('&', '&&'))
+                        count += 1
+                if not count:
+                    self.user.AppendMenuW(target, 1, 0, 'Chưa có model · mở API Zoo')
+                self.user.AppendMenuW(menu, 0x10, target, title)
+            self.user.AppendMenuW(menu, 0x800, 0, None)
+            self.user.AppendMenuW(menu, 0, 220, 'API Zoo / lấy lại danh sách model…')
+            point = W.POINT()
+            self.user.GetCursorPos(C.byref(point))
+            choice = self.track_popup_menu(menu, 0x102, point.x, point.y)
+            if choice == 220:
+                self.command(220)
+            elif choice in commands:
+                pid, model, level, vision = commands[choice]
+                try:
+                    saved = ZooStore(ROOT).save(select_model(data, pid, model, level, vision))
+                    apply_config(self.config, saved, select_primary=True)
+                    self.client.zoo_router = ZooRouter()
+                    self.set_text('model', self.model_name())
+                    self.state = ('Model ảnh: ' if vision else 'Model chữ: ') + model + ' · reasoning ' + level
+                except (OSError, ValueError, RuntimeError):
+                    self.state = 'Không lưu được model/reasoning; cấu hình trước được giữ nguyên'
+                self.tooltip(self.state)
+                self.refresh_panel()
+        finally:
+            self.user.DestroyMenu(menu)
 
     def open_network_picker(self):
         self.start_network('refresh', show_picker=True)
@@ -3248,7 +3310,13 @@ class WindowsApp:
                 self.clipboard_changed()
                 return 0
             if msg == 0x0113:
-                self.tick()
+                if wp == 3:
+                    self.user.KillTimer(hwnd, 3)
+                    self.network_press.previous = None
+                    if not getattr(self, 'exiting', False) and not getattr(self, 'hotkey_open', False):
+                        self.quick_model_menu()
+                else:
+                    self.tick()
                 return 0
             if msg == 0x8001:
                 event = lp & 0xFFFF

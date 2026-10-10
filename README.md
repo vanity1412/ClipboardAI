@@ -37,6 +37,10 @@ F7 copy đáp án hoàn tất gần nhất và hiện lại chính đáp án đ�
 
 ## Cài đặt phím tắt
 
+**F3 một lần:** sau khoảng nửa giây hiện menu nhỏ chọn **Model trả lời** hoặc **Model ảnh · F2/F4**. Chọn API/model rồi mức reasoning trong menu con; lựa chọn được lưu theo từng model, mặc định `medium`. **F3 hai lần trong 0,5 giây:** mở chọn card mạng như trước. Menu model không đổi cấu hình khi AI/mạng đang xử lý. Chọn `Mặc định nhà cung cấp` nếu model/gateway không hỗ trợ effort. API Zoo cũng có trường Reasoning mặc định; thay đổi trường đó sẽ thay thế các mức riêng từng model.
+
+OpenAI-compatible gửi `reasoning_effort`, Responses gửi `reasoning.effort`, ChatGPT qua Codex gửi `effort`, Anthropic Messages gửi `output_config.effort`. Gateway cần hỗ trợ/thực hiện tham số này; thành công HTTP không chứng minh mức suy luận nội bộ đã được áp dụng. DeepSeek chỉ chọn `high`/`max`; mặc định `medium` được ánh xạ thành `high` theo giới hạn giao thức. Menu Nhanh/Suy nghĩ kỹ cũ vẫn dành cho chế độ legacy, còn API Zoo dùng mức riêng đã lưu.
+
 **Desktop Agent / F2:** mở cửa sổ đề trắc nghiệm rồi nhấn F2. Agent lấy cây giao diện và ảnh cửa sổ qua Cua Driver MCP, dùng model đọc ảnh đang chọn trong API Zoo để suy luận từng bước, chọn đáp án và cuộn/chuyển câu. Mỗi thao tác đều được theo sau bởi quan sát mới. F10 dừng phát thêm thao tác; Tạm dừng/Thoát cũng dừng agent. Agent dừng trước nút nộp bài để bạn kiểm tra và tự nộp. Không tự copy hoặc lưu ảnh/đề của lượt agent vào lịch sử.
 
 Giữ `cua-driver.exe` và `cua-driver-uia.exe` cạnh EXE. Build tải runtime chính thức phiên bản 0.34.1 từ wheel `cua-driver` và chép các file này cùng thông tin phiên bản/giấy phép. Khi chạy source, dùng `python scripts/setup_cua.py` một lần. F2 dùng một kết nối MCP stdio riêng; model trả quyết định JSON để app gọi tool MCP, không cần bật shell hay công cụ Codex trong luồng hỏi đáp. Chế độ này dùng model ảnh của API đang chọn, không tự chuyển API dự phòng; có giới hạn 360 bước/15 phút. Lỗi tạm thời được quan sát lại có giới hạn; trang đăng nhập hoặc lỗi kéo dài sẽ dừng và báo lý do.

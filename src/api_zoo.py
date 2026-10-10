@@ -84,6 +84,12 @@ def validate(data):
                 raise ValueError('Thông tin model ảnh không hợp lệ')
             if m['id'] not in {old['id'] for old in catalog}:
                 catalog.append({'id': m['id'], 'vision': vision})
+                if 'reasoning_efforts' in m:
+                    from model_reasoning import LEVELS
+                    values = m['reasoning_efforts']
+                    if not isinstance(values, list) or any(v not in LEVELS or v == 'default' for v in values):
+                        raise ValueError('Danh sách reasoning của model không hợp lệ')
+                    catalog[-1]['reasoning_efforts'] = list(dict.fromkeys(values))
         timeout = p.get('timeout', 3000)
         tokens = p.get('max_tokens', 0)
         priority = p.get('priority', len(result))
@@ -93,8 +99,16 @@ def validate(data):
             raise ValueError('Token hoặc thứ tự ưu tiên không hợp lệ')
         if type(p.get('enabled', True)) is not bool:
             raise ValueError('Trạng thái API không hợp lệ')
+        from model_reasoning import LEVELS
+        effort = p.get('reasoning_effort', 'medium')
+        efforts = p.get('model_efforts', {})
+        if effort not in LEVELS or not isinstance(efforts, dict) or len(efforts) > 1000 or any(
+                not isinstance(k, str) or not k or len(k) > 200 or any(c.isspace() for c in k) or v not in LEVELS
+                for k, v in efforts.items()):
+            raise ValueError('Reasoning effort không hợp lệ')
         row.update(provider=provider, timeout=timeout, max_tokens=tokens,
-                   priority=priority, enabled=p.get('enabled', True), models=catalog)
+                   priority=priority, enabled=p.get('enabled', True), models=catalog,
+                   reasoning_effort=effort, model_efforts=dict(efforts))
         result.append(row)
     primary = data.get('primary', '')
     if not isinstance(primary, str) or primary and primary not in ids:
@@ -123,6 +137,8 @@ def consolidate(data):
             primary = target['id']
             target['model'], target['vision_model'] = p['model'], p['vision_model']
             target['timeout'], target['max_tokens'] = p['timeout'], p['max_tokens']
+            target['reasoning_effort'] = p['reasoning_effort']
+        target['model_efforts'].update(p['model_efforts'])
         known = {m['id'] for m in target['models']}
         for m in p['models']:
             if m['id'] not in known:
