@@ -1316,8 +1316,9 @@ class WindowsApp:
             # Network inventory and switching do not own clipboard output.
             # A completed answer may still be waiting for another app to unlock it.
             message = ("Đang đọc card mạng" if target == "refresh" else
+                       "Đang bật Wi-Fi và đọc danh sách mạng; giữ kết nối hiện tại" if target == 'wifi_prepare_scan' else
                        "Đang đọc các mạng Wi-Fi" if target == 'wifi_scan' else
-                       "Đang chuẩn bị chuyển mạng; xác nhận UAC nếu Windows hỏi")
+                       "Đang bật card được chọn và kiểm tra kết nối…")
             if not self.busy:
                 self.state = message
             try:
@@ -1333,8 +1334,10 @@ class WindowsApp:
                     result = self.network.perform(target, probe_host or "api.deepseek.com", **options)
                 except Exception:
                     result = dict(ok=False, message='Không thực hiện được thao tác mạng; thử làm mới.')
-                if target == 'wifi_scan':
+                if target in ('wifi_scan', 'wifi_prepare_scan'):
                     result.setdefault('adapter_id', adapter_id)
+                result['target'] = target
+                result['adapter_id'] = adapter_id
                 self.results.put(("network", result, show_picker))
             threading.Thread(target=switch, daemon=True).start()
         self.tooltip(self.state)
@@ -1524,17 +1527,18 @@ class WindowsApp:
                 if not rows:
                     self.user.AppendMenuW(menu, 1, 0, title + ' · không có card')
                     continue
-                target = menu if len(rows) == 1 else self.user.CreatePopupMenu()
+                target = menu
                 for row in rows:
                     ident = 5001 + len(commands)
                     commands[ident] = (kind, row['id'])
-                    label = self.adapter_menu_label(row, title if len(rows) == 1 else '')
-                    connected = row['enabled'] and row.get('status') == 'Up'
+                    label = self.adapter_menu_label(row, title)
+                    connected = row['enabled'] and row.get('status') == 'Up' and not any(
+                        other['enabled'] for other in self.network.adapters if other['id'] != row['id'])
                     self.user.AppendMenuW(target, 8 if connected else 0, ident, label.replace('&', '&&'))
                     if kind == 'wifi':
                         scan_id = 5001 + len(commands)
-                        commands[scan_id] = ('wifi_scan', row['id'])
-                        scan_label = 'Chọn mạng Wi-Fi (SSID)' + (' · ' + row['name'] if len(rows) > 1 else '') + '…'
+                        commands[scan_id] = ('wifi_scan' if row['enabled'] else 'wifi_prepare_scan', row['id'])
+                        scan_label = ('Bật card và chọn Wi-Fi' if not row['enabled'] else 'Chọn mạng Wi-Fi (SSID)') + (' · ' + row['name'] if len(rows) > 1 else '') + '…'
                         self.user.AppendMenuW(target, 0, scan_id, scan_label.replace('&', '&&'))
                 if target != menu:
                     self.user.AppendMenuW(menu, 0x10, target, title + f' · {len(rows)} card')
@@ -1545,7 +1549,7 @@ class WindowsApp:
             choice = self.track_popup_menu(menu, 0x102, point.x, point.y)
             if choice in commands:
                 kind, ident = commands[choice]
-                self.start_network(kind, adapter_id=ident, show_picker='wifi' if kind == 'wifi_scan' else False)
+                self.start_network(kind, adapter_id=ident, show_picker='wifi' if kind in ('wifi_scan', 'wifi_prepare_scan') else False)
             elif choice == 5999:
                 self.open_wifi_settings()
             elif choice == 5998:
@@ -3131,7 +3135,10 @@ class WindowsApp:
                 if not self.busy:
                     self.state = result[1]["message"]
                 self.tooltip(self.state)
-                log_event("network_done", ok=result[1].get("ok", False))
+                log_event("network_done", ok=result[1].get("ok", False),
+                          code=result[1].get('code', 'unknown'), target=result[1].get('target'),
+                          adapter_id=result[1].get('adapter_id'),
+                          recovery_pending=result[1].get('recovery_pending', False))
                 if len(result) > 2 and result[2]:
                     if result[2] == 'wifi':
                         self.wifi_menu(result[1])

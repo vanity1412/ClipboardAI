@@ -253,8 +253,11 @@ function Invoke-NetworkSwitch($request) {
         }
         foreach ($source in $sources) {
             Test-SwitchDeadline $request $operationDeadline
-            if ($source.enabled -and $source.kind -eq 'wifi') {
-                $sourceWifiBefore[$source.id] = Read-WifiConnection $source.id
+            if (-not $request.prepare_wifi -and $source.enabled -and $source.kind -eq 'wifi') {
+                try { $sourceWifiBefore[$source.id] = Read-WifiConnection $source.id } catch {
+                    # Selecting a card must not require WLAN profile/location permission.
+                    # Windows auto-connect and IP readiness are checked during rollback.
+                }
             }
         }
         foreach ($target in $targets) {
@@ -263,6 +266,14 @@ function Invoke-NetworkSwitch($request) {
                 $targetTouched.Add($target.id)
                 Find-PhysicalAdapter $target.id | Enable-NetAdapter -Confirm:$false
             }
+        }
+        if ($request.prepare_wifi) {
+            Test-SwitchDeadline $request $operationDeadline
+            $prepared = @(Read-PhysicalAdapters)
+            foreach ($target in $targets) {
+                if (-not (@($prepared | Where-Object { $_.id -eq $target.id -and $_.enabled }).Count)) { throw 'enable_failed' }
+            }
+            return @{ok=$true; code='wifi_prepared'; adapters=$prepared}
         }
         if ($request.wifi_profile) {
             Test-SwitchDeadline $request $operationDeadline
@@ -289,7 +300,9 @@ function Invoke-NetworkSwitch($request) {
             }
         }
         Test-SwitchDeadline $request $operationDeadline
-        if (-not (Test-GroupReady $targets) -or -not (Test-ProviderConnection $request.probe_host)) { throw 'provider_unreachable' }
+        if (-not (Test-GroupReady $targets)) { throw 'target_unavailable' }
+        $providerReady = Test-ProviderConnection $request.probe_host
+        if (-not $providerReady -and -not $request.allow_provider_failure) { throw 'provider_unreachable' }
         Test-SwitchDeadline $request $operationDeadline
         $final = @(Read-PhysicalAdapters)
         if (@($final | Where-Object { $_.id -notin @($targets.id) -and $_.enabled }).Count) { throw 'disable_failed' }
@@ -297,7 +310,8 @@ function Invoke-NetworkSwitch($request) {
             $after = @($final | Where-Object { $_.id -eq $target.id })
             if ($after.Count -ne 1 -or -not $after[0].enabled) { throw 'enable_failed' }
         }
-        return @{ok=$true; code='switched'; mode=$request.target_mode; adapters=$final}
+        return @{ok=$true; code=$(if ($providerReady) { 'switched' } else { 'switched_api_unreachable' });
+            provider_reachable=$providerReady; mode=$request.target_mode; adapters=$final}
     } catch {
         $failure = $_.Exception.Message
         $rollbackOk = $true
@@ -387,11 +401,15 @@ def read_adapters():
 def make_switch_script(target_mode, probe_host, result_path, prefer_wifi=False, adapter_id=None,
                        wifi_profile=None, ssid_hex=None, cancel_path=None):
     # JSON data is base64 encoded, never interpolated as executable PowerShell.
+    prepare_wifi = target_mode == 'wifi_prepare'
+    if prepare_wifi:
+        target_mode = 'wifi'
     if target_mode not in ('wifi', 'lan'):
         raise ValueError('adapter_missing')
     request = dict(target_mode=target_mode, probe_host=probe_host,
                    result_path=str(result_path), prefer_wifi=bool(prefer_wifi),
-                   wifi_helper=WLAN_HELPER_SOURCE)
+                   wifi_helper=WLAN_HELPER_SOURCE, prepare_wifi=prepare_wifi,
+                   allow_provider_failure=not prefer_wifi)
     # Send proxy selection from the unelevated user, including no_proxy bypass;
     # a UAC helper may run under another administrator's registry/environment.
     try:
@@ -626,7 +644,7 @@ def run_switch(target_mode, probe_host, prefer_wifi=False, adapter_id=None,
 NETWORK_MESSAGES = {
     'adapter_read_failed': 'Không đọc được card mạng; thử Làm mới mạng trong tray.',
     'adapter_missing': 'Không tìm thấy card vật lý thuộc nhóm mạng đích; làm mới mạng trong tray.',
-    'target_unavailable': 'Mạng đích chưa kết nối/có IP; giữ trạng thái mạng trước.',
+    'target_unavailable': 'Card đã chọn chưa có kết nối/IP và gateway; giữ mạng trước. Với Wi-Fi, chọn mạng Wi-Fi (SSID); với LAN, kiểm tra dây/tethering.',
     'provider_unreachable': 'Mạng đích chưa kết nối được API; đã khôi phục mạng trước.',
     'disable_failed': 'Không tắt được card cũ; đã khôi phục mạng trước.',
     'enable_failed': 'Không bật được đủ card mạng đích; đã khôi phục mạng trước.',
@@ -715,7 +733,7 @@ class NetworkManager:
                                 message=detail + ' · Mạng: ' + self.label())
                 return {'ok': True, 'message': 'Mạng: ' + self.label()}
             groups = {kind: [row for row in self.adapters if row['kind'] == kind] for kind in ('wifi', 'lan')}
-            if target in ('wifi_scan', 'wifi_connect'):
+            if target in ('wifi_scan', 'wifi_prepare_scan', 'wifi_connect'):
                 if adapter_id is None:
                     raise ValueError('choose_adapter')
                 adapter_id = str(UUID(adapter_id))
@@ -723,9 +741,17 @@ class NetworkManager:
                 if selected is None:
                     raise ValueError('adapter_missing')
                 if not selected['enabled']:
-                    raise ValueError('wifi_disabled')
+                    if target != 'wifi_prepare_scan':
+                        raise ValueError('wifi_disabled')
+                    prepared = run_switch('wifi_prepare', probe_host, adapter_id=adapter_id)
+                    self.adapters = prepared.get('adapters', self.adapters)
+                    if not prepared.get('ok'):
+                        code = prepared.get('code', 'switch_failed')
+                        self._recovery_seen = bool(prepared.get('recovery_pending'))
+                        return dict(ok=False, code=code, recovery_pending=prepared.get('recovery_pending', False),
+                                    message=NETWORK_MESSAGES.get(code, NETWORK_MESSAGES['switch_failed']))
                 self.wifi_networks = read_wifi_networks(adapter_id)
-                if target == 'wifi_scan':
+                if target in ('wifi_scan', 'wifi_prepare_scan'):
                     return dict(ok=True, code='wifi_scanned', message='Chọn mạng Wi-Fi đã lưu',
                                 adapter_id=adapter_id, networks=self.wifi_networks)
                 if not isinstance(profile_name, str) or not profile_name:
@@ -740,8 +766,8 @@ class NetworkManager:
                 self.adapters = result.get('adapters', self.adapters)
                 if result.get('ok'):
                     self.mode = 'wifi'
-                    return dict(ok=True, code='wifi_connected', ssid=network['ssid'],
-                                message='Đã kết nối Wi-Fi · ' + network['ssid'])
+                    return dict(ok=True, code=result.get('code', 'wifi_connected'), ssid=network['ssid'],
+                                message=self.switch_message(selected, result) + ' · ' + network['ssid'])
                 code = result.get('code', 'switch_failed')
                 self._recovery_seen = bool(result.get('recovery_pending'))
                 return dict(ok=False, code=code, recovery_pending=result.get('recovery_pending', False),
@@ -760,14 +786,15 @@ class NetworkManager:
                 raise ValueError('adapter_missing')
             if selected['enabled'] and selected['status'] == 'Up' and not any(row['enabled'] for row in self.adapters if row['id'] != adapter_id):
                 self.mode = target
-                return {'ok': True, 'message': 'Đang dùng ' + ('Wi-Fi' if target == 'wifi' else 'LAN')}
+                return {'ok': True, 'code': 'already_selected', 'message': 'Đang chỉ dùng ' + selected['name']}
             result = run_switch(target, probe_host, adapter_id=adapter_id)
             self.adapters = result.get('adapters', self.adapters)
             if result.get('ok'):
                 self.mode = result.get('mode', target)
                 if result.get('code') in ('kept_lan', 'fallback_lan'):
                     return {'ok': True, 'message': 'Wi-Fi chưa dùng được; đang dùng LAN'}
-                return {'ok': True, 'message': 'Đã chuyển sang ' + ('Wi-Fi' if target == 'wifi' else 'LAN')}
+                return {'ok': True, 'code': result.get('code', 'switched'),
+                        'message': self.switch_message(selected, result)}
             self._recovery_seen = bool(result.get('recovery_pending'))
             return {'ok': False, 'code': result.get('code', 'switch_failed'),
                     'recovery_pending': result.get('recovery_pending', False),
@@ -776,3 +803,12 @@ class NetworkManager:
             code = str(exc) if isinstance(exc, (OSError, ValueError)) else 'switch_failed'
             return {'ok': False, 'code': code,
                     'message': NETWORK_MESSAGES.get(code, NETWORK_MESSAGES['adapter_read_failed'])}
+
+    def switch_message(self, selected, result):
+        disabled = [row['name'] for row in self.adapters if row['id'] != selected['id'] and not row['enabled']]
+        message = 'Đang chỉ dùng ' + selected['name']
+        if disabled:
+            message += ' · Đã tắt: ' + ', '.join(disabled)
+        if result.get('code') == 'switched_api_unreachable':
+            message += ' · API chưa truy cập được; vẫn giữ card đã chọn'
+        return message

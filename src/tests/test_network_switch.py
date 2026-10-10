@@ -132,6 +132,20 @@ class HotkeyTests(unittest.TestCase):
             app.open_network_picker.assert_called_once_with()
             app.user.KillTimer.assert_called_once_with(1, 3)
 
+    def test_picker_lists_each_card_directly_and_disabled_wifi_has_prepare_action(self):
+        app = self.app()
+        app.network.adapters = adapters()
+        app.network.adapters[0]['enabled'] = False
+        app.network.adapters.append(dict(adapters()[1], id='33333333-3333-3333-3333-333333333333', name='Ethernet 3'))
+        app.track_popup_menu = Mock(return_value=5002)
+        app.start_network = Mock()
+        app.network_menu()
+        app.user.CreatePopupMenu.assert_called_once()
+        labels = [call.args[-1] for call in app.user.AppendMenuW.call_args_list]
+        self.assertTrue(any('Bật card và chọn Wi-Fi' in label for label in labels))
+        self.assertTrue(any('Ethernet 3' in label for label in labels))
+        app.start_network.assert_called_once_with('wifi_prepare_scan', adapter_id=WIFI, show_picker='wifi')
+
     def test_single_f3_timer_opens_model_picker_not_network(self):
         app = self.app()
         app.quick_model_menu, app.open_network_picker = Mock(), Mock()
@@ -212,7 +226,7 @@ function Disable-NetAdapter { param([Parameter(ValueFromPipeline=$true)]$InputOb
     if ($global:mode -eq 'group_disable_failure' -and $InputObject.Name -eq 'Ethernet 3') { throw 'synthetic second NIC error' }
     $InputObject.AdminStatus=2; $InputObject.Status='Disabled'
 } }
-function Test-ProviderConnection { param($hostName) $global:events.Add('probe'); return ($global:mode -notin @('provider_failure','rollback_failure')) }
+function Test-ProviderConnection { param($hostName) $global:events.Add('probe'); return ($global:mode -notin @('provider_failure','manual_provider_failure','rollback_failure')) }
 function Read-WifiConnection { param($id) return @{profile='';ssid_hex=''} }
 function Connect-WifiProfile { param($id,$profile) }
 function Disconnect-WifiProfile { param($id) }
@@ -234,6 +248,8 @@ if ($global:mode -in @('all_lan_success','selected_wifi','selected_lan')) {
 }
 $targetMode = if ($global:mode -in @('all_lan_success','selected_lan')) { 'lan' } else { 'wifi' }
 $request = [pscustomobject]@{target_mode=$targetMode; probe_host='no.real.network'}
+if ($global:mode -eq 'manual_provider_failure') { $request | Add-Member allow_provider_failure $true }
+if ($global:mode -eq 'prepare_wifi') { $request | Add-Member prepare_wifi $true }
 if ($global:mode -eq 'selected_wifi') { $request | Add-Member adapter_id '44444444-4444-4444-4444-444444444444' }
 if ($global:mode -eq 'selected_lan') { $request | Add-Member adapter_id '55555555-5555-5555-5555-555555555555' }
 $result = if ($global:mode -eq 'wifi_fallback') { Invoke-WifiPriority $request } else { Invoke-NetworkSwitch $request }
@@ -265,6 +281,20 @@ ConvertTo-Json -InputObject $result -Depth 5 -Compress
         self.assertEqual(result['events'][-2:], ['enable:Ethernet', 'disable:Wi-Fi'])
         states = {row['kind']: row['enabled'] for row in result['adapters']}
         self.assertEqual(states, {'wifi': False, 'lan': True})
+
+    def test_manual_selection_keeps_only_selected_card_when_api_is_unreachable(self):
+        result = self.run_transaction('manual_provider_failure')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['code'], 'switched_api_unreachable')
+        self.assertEqual([row['name'] for row in result['adapters'] if row['enabled']], ['Wi-Fi'])
+        self.assertEqual(result['events'], ['enable:Wi-Fi', 'disable:Ethernet', 'probe'])
+
+    def test_prepare_disabled_wifi_keeps_old_connection_and_skips_api_probe(self):
+        result = self.run_transaction('prepare_wifi')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['code'], 'wifi_prepared')
+        self.assertEqual(result['events'], ['enable:Wi-Fi'])
+        self.assertTrue(all(row['enabled'] for row in result['adapters']))
 
     def test_unavailable_target_does_not_disable_old_network(self):
         result = self.run_transaction('not_ready')

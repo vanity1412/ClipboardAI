@@ -129,6 +129,30 @@ class WifiManagerTests(unittest.TestCase):
             operation.assert_called_once_with('wifi', 'api.deepseek.com', adapter_id=WIFI,
                          wifi_profile=row['profile'], ssid_hex=row['ssid_hex'])
 
+    def test_explicit_prepare_enables_disabled_wifi_then_reads_networks(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = switch.NetworkManager(root)
+            rows = [dict(ADAPTERS[0], enabled=False), ADAPTERS[1]]
+            with patch('network_switch.read_adapters', return_value=rows), \
+                    patch('network_switch.read_wifi_networks', return_value=[network()]) as scan, \
+                    patch('network_switch.run_switch', return_value=dict(ok=True, adapters=ADAPTERS)) as operation:
+                result = manager.perform('wifi_prepare_scan', adapter_id=WIFI)
+            self.assertTrue(result['ok'])
+            operation.assert_called_once_with('wifi_prepare', 'api.deepseek.com', adapter_id=WIFI)
+            scan.assert_called_once_with(WIFI)
+
+    def test_failed_prepare_never_scans_or_connects(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = switch.NetworkManager(root)
+            rows = [dict(ADAPTERS[0], enabled=False), ADAPTERS[1]]
+            with patch('network_switch.read_adapters', return_value=rows), \
+                    patch('network_switch.read_wifi_networks') as scan, \
+                    patch('network_switch.run_switch', return_value=dict(ok=False, code='uac_denied')):
+                result = manager.perform('wifi_prepare_scan', adapter_id=WIFI)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['code'], 'uac_denied')
+            scan.assert_not_called()
+
     def test_unsaved_and_stale_networks_never_start_a_transaction(self):
         with tempfile.TemporaryDirectory() as root:
             manager = switch.NetworkManager(root)

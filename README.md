@@ -87,6 +87,8 @@ python scripts/run_tests.py
 
 Kết quả ở `dist/ClipboardAI.exe`. Test giao diện có thể chạy thêm `python scripts/run_tests.py --desktop` tại desktop Windows. Chạy source: `python src/deepseek_flash_entry.py`; mở cấu hình trực tiếp: thêm `--open-zoo`.
 
+Chọn mạng bằng **F3 hai lần**: danh sách hiển thị trực tiếp từng card Wi-Fi/LAN. Chọn một card để chỉ dùng card đó và tắt các Wi-Fi/LAN vật lý khác; VPN/card ảo được giữ. Card đích phải có kết nối, IP và gateway trước khi tắt mạng cũ. Với Wi-Fi đang tắt, chọn **Bật card và chọn Wi-Fi** để bật card, giữ mạng hiện tại và mở danh sách SSID đã lưu; chỉ tắt các card khác sau khi kết nối SSID thành công. Lỗi truy cập endpoint AI chỉ được báo riêng, không tự đổi về card cũ khi card đã chọn vẫn có kết nối. Lỗi bật/tắt card, mất kết nối hoặc hủy thao tác vẫn khôi phục trạng thái trước. Kết quả nêu tên card sử dụng, các card đã tắt; log ghi mã lỗi và card được chọn.
+
 Chế độ **Tự nhận dạng câu** nằm trong menu **Prompt đang dùng** và cửa sổ sửa prompt. Mặc định Hỏi đáp dùng chế độ này; có thể chọn cho Lập trình. Model phân biệt trắc nghiệm, đọc hiểu code, tính toán/đáp số và viết code trong cùng lượt trả lời, kể cả đề hỗn hợp. Không gọi API phân loại riêng, không đổi model/reasoning đã chọn. Đề thiếu hoặc ảnh bị cắt được đánh dấu theo từng câu. Code đầy đủ vẫn nằm trong kết quả/clipboard; popup ngắn chỉ là bản xem nhanh. Prompt riêng đã lưu vẫn được giữ.
 
 Để chạy bản portable ở ổ E và giữ mã nguồn trong thư mục repo hiện tại, build sang thư mục staging rồi chép EXE/runtime/tài liệu sang `E:\ClipboardAI-Windows-x64`; giữ nguyên `api_zoo.json`, `preferences.json`, lịch sử, kho ảnh và thư mục đăng nhập ở E. Đóng bản đang chạy rồi mở lại EXE sau cập nhật. Không chép cấu hình mẫu đè lên cấu hình riêng.

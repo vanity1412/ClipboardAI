@@ -362,7 +362,9 @@ class SelectedFixTests(unittest.TestCase):
                 self.assertIn('Chưa kết nối', entries[5001][3])
                 self.assertEqual(entries[5001][1] & 8, 0)
                 self.assertIn('SSID', entries[5002][3])
-                self.assertEqual(entries[5003][1] & 8, 8)
+                # A check marks exclusive selection; both physical cards are enabled here.
+                self.assertEqual(entries[5003][1] & 8, 0)
+                self.assertIn('Đã kết nối', entries[5003][3])
                 app.network.perform.assert_not_called()
 
     def test_wifi_scan_during_ai_keeps_answer_and_processing_status(self):
