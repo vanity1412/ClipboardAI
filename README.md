@@ -87,6 +87,8 @@ python scripts/run_tests.py
 
 Kết quả ở `dist/ClipboardAI.exe`. Test giao diện có thể chạy thêm `python scripts/run_tests.py --desktop` tại desktop Windows. Chạy source: `python src/deepseek_flash_entry.py`; mở cấu hình trực tiếp: thêm `--open-zoo`.
 
+Chế độ **Tự nhận dạng câu** nằm trong menu **Prompt đang dùng** và cửa sổ sửa prompt. Mặc định Hỏi đáp dùng chế độ này; có thể chọn cho Lập trình. Model phân biệt trắc nghiệm, đọc hiểu code, tính toán/đáp số và viết code trong cùng lượt trả lời, kể cả đề hỗn hợp. Không gọi API phân loại riêng, không đổi model/reasoning đã chọn. Đề thiếu hoặc ảnh bị cắt được đánh dấu theo từng câu. Code đầy đủ vẫn nằm trong kết quả/clipboard; popup ngắn chỉ là bản xem nhanh. Prompt riêng đã lưu vẫn được giữ.
+
 Để chạy bản portable ở ổ E và giữ mã nguồn trong thư mục repo hiện tại, build sang thư mục staging rồi chép EXE/runtime/tài liệu sang `E:\ClipboardAI-Windows-x64`; giữ nguyên `api_zoo.json`, `preferences.json`, lịch sử, kho ảnh và thư mục đăng nhập ở E. Đóng bản đang chạy rồi mở lại EXE sau cập nhật. Không chép cấu hình mẫu đè lên cấu hình riêng.
 
 Chẩn đoán API đã lưu ở E: `python scripts/diagnose_providers.py E:/ClipboardAI-Windows-x64`. Script gửi câu OK và ảnh màu giả lập nhỏ, không chụp màn hình hay thao tác desktop, không sửa cấu hình và không in key. Mỗi lượt có timeout 60 giây; báo cáo riêng ở `build/provider-diagnostics.json`. Thêm `--agent --profile TênAPI` để kiểm tra JSON quyết định F2 mà không thực thi thao tác. Lấy được danh sách model không chứng minh endpoint sinh câu trả lời/ảnh đang hoạt động.

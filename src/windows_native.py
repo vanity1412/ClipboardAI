@@ -2082,14 +2082,14 @@ class WindowsApp:
                 self.state = 'Chưa lưu được lựa chọn; giữ cấu hình trước'
             self.tooltip(self.state)
             return
-        if ident in (660, 661, 662, 663):
+        if ident in (660, 661, 662, 663, 668):
             if self.busy:
                 return
             try:
                 if ident in (660, 661):
                     self.set_reasoning('fast' if ident == 660 else 'careful')
                 else:
-                    self.set_mode_prompt(self.session.mode, default_prompt(self.session.mode) if ident == 662 else 'free')
+                    self.set_mode_prompt(self.session.mode, 'short' if ident == 668 else default_prompt(self.session.mode) if ident == 662 else 'free')
             except (OSError, ValueError, TypeError):
                 self.state = 'Không lưu được lựa chọn; giữ cấu hình đang dùng'
                 self.tooltip(self.state)
@@ -2827,7 +2827,7 @@ class WindowsApp:
             self.user.AppendMenuW(modes, 0x10, reasoning, 'Suy luận · ' + (('Nhanh' if selected == 'fast' else 'Suy nghĩ kỹ') if supported else 'Model quyết định'))
             prompts = self.user.CreatePopupMenu()
             active = selected_prompt(self.session.mode, self.config)
-            for ident, value, label in ((662, default_prompt(current), 'Mặc định'), (663, 'free', 'Theo yêu cầu')):
+            for ident, value, label in ((662, default_prompt(current), 'Mặc định'), (668, 'short', 'Tự nhận dạng câu'), (663, 'free', 'Theo yêu cầu')):
                 self.user.AppendMenuW(prompts, (8 if active == value else 0) | (1 if self.busy else 0), ident, label)
             library = self.user.CreatePopupMenu()
             self.saved_prompt_commands = {}

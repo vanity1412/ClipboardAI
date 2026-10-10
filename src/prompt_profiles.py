@@ -4,7 +4,7 @@ from chat_modes import CHAT, ANALYSIS, CODING, MODE_ORDER, normalize_mode, purpo
 from coding_prompt import CODE_PROMPT
 
 PRESETS = ('short', 'choices', 'code', 'free', 'custom')
-LABELS = {'short': 'Ngắn gọn · tự nhận dạng câu hỏi',
+LABELS = {'short': 'Tự nhận dạng câu · trắc nghiệm / code / tính toán',
           'choices': 'Trắc nghiệm / điền khuyết · chỉ đáp án',
           'code': 'Lập trình', 'free': 'Theo yêu cầu · không thêm prompt',
           'custom': 'Prompt riêng'}

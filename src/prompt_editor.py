@@ -57,6 +57,7 @@ def _open_editor(window, config, mode, results):
         selections.clear()
         m = current_mode()
         selections.update({'Mặc định': (default_prompt(m), None),
+                           'Tự nhận dạng câu': ('short', None),
                            'Theo yêu cầu': ('free', None), 'Prompt riêng': ('custom', None)})
         for item in config.get('SAVED_PROMPTS', []):
             selections['Đã lưu · ' + item['name'] + ' [' + item['id'][:8] + ']'] = (item['style'], item['text'])
