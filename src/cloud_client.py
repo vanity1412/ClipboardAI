@@ -138,6 +138,8 @@ class CloudClient(DeepSeekClient):
                         self.config = config
                 else:
                     from provider_protocols import request_body, completed_response
+                    from windows_native import log_event
+                    import time
                     tokens, timeout = limits(config, candidate['max_tokens'], candidate['timeout'])
                     protocol = candidate['provider']
                     body = request_body(protocol, selected, request_messages(text, history, instruction), tokens, self.cancel_event is not None)
@@ -145,13 +147,26 @@ class CloudClient(DeepSeekClient):
                     apply_effort(body, protocol, selected, effort)
                     route = {'anthropic': '/messages', 'responses': '/responses'}.get(protocol, '/chat/completions')
                     options = {'protocol': protocol} if protocol in ('anthropic', 'responses') else {}
-                    data = self.post(candidate['base_url'] + route, body, timeout, key=candidate['api_key'], **options)
+                    started = time.monotonic()
+                    phase = 'vision' if vision else 'solve'
+                    log_event('api_request', model=selected, protocol=protocol, phase=phase,
+                        reasoning_effort=effort, max_tokens=tokens, timeout_s=timeout,
+                        stream=bool(body.get('stream')))
                     try:
-                        answer = completed_response(protocol, data)
-                    except (KeyError, IndexError, TypeError, ValueError):
-                        raise RuntimeError('API Zoo chưa trả câu trả lời hoàn chỉnh; clipboard giữ nguyên') from None
+                        data = self.post(candidate['base_url'] + route, body, timeout, key=candidate['api_key'], **options)
+                        try:
+                            answer = completed_response(protocol, data)
+                        except (KeyError, IndexError, TypeError, ValueError):
+                            raise RuntimeError('API Zoo chưa trả câu trả lời hoàn chỉnh; clipboard giữ nguyên') from None
+                    except Exception as exc:
+                        log_event('api_failed', model=selected, protocol=protocol, phase=phase,
+                            elapsed_s=round(time.monotonic() - started, 2), error_type=type(exc).__name__,
+                            status=getattr(exc, 'status', None), code=getattr(exc, 'code', None))
+                        raise
+                    log_event('api_response', model=selected, protocol=protocol, phase=phase,
+                        elapsed_s=round(time.monotonic() - started, 2), answer_characters=len(answer))
                 return answer.strip(), candidate['name'] + ': ' + selected
-            return self.zoo_router.run(config, profile, json_output or vision_input, call, self.cancel_event, getattr(self, 'zoo_notify', None))
+            return self.zoo_router.run(config, profile, vision_input, call, self.cancel_event, getattr(self, 'zoo_notify', None))
         if model == "deepseek-flash":
             return super().ask(text, history, instruction, json_output)
         if model not in dict(self.config.get("MODEL_CHOICES", DEFAULT_MODELS)):

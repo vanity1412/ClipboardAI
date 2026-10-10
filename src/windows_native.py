@@ -1711,7 +1711,10 @@ class WindowsApp:
                     message = str(exc) if isinstance(exc, (RuntimeError, TimeoutError)) else 'Agent gặp lỗi; kiểm tra Cua Driver và API Zoo'
                     self.results.put(('agent_failed', ident, message[:350]))
                     log_event('desktop_agent_failed', request_id=ident, phase=agent.phase,
-                              error_type=type(exc).__name__, error_code=getattr(exc, 'code', 'unknown'))
+                              error_type=type(exc).__name__,
+                              error_code=getattr(exc, 'code', getattr(exc, 'status', 'timeout' if isinstance(exc, TimeoutError) else 'unknown')),
+                              status=getattr(exc, 'status', None),
+                              model=(selected_profile(config) or {}).get('vision_model', ''))
                 finally:
                     self.results.put(('agent_stopped', ident, agent))
             self.agent_thread = threading.Thread(target=run, daemon=True)

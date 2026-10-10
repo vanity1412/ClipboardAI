@@ -112,3 +112,52 @@ class ReasoningTests(unittest.TestCase):
         data = catalog()
         data['profiles'][0]['models'][0]['reasoning_efforts'] = ['low', 'medium']
         self.assertEqual(choices(validate(data)['profiles'][0], 'text'), ('default', 'low', 'medium'))
+
+    def test_non_reasoning_models_never_receive_forced_medium(self):
+        from model_reasoning import choices
+        for model, protocol in (('gpt-4.1', 'compatible'), ('gpt-4o-mini', 'responses'),
+                                ('claude-sonnet-4-5-20250929', 'anthropic')):
+            with self.subTest(model=model):
+                profile = {'provider': protocol, 'reasoning_effort': 'medium'}
+                self.assertEqual(choices(profile, model), ('default',))
+                self.assertEqual(effort_for(profile, model), 'default')
+                self.assertEqual(apply_effort({}, protocol, model, effort_for(profile, model)), {})
+
+    def test_json_text_does_not_require_or_switch_to_vision_model(self):
+        data = catalog()
+        data['profiles'][0]['vision_model'] = ''
+        config = {}
+        apply_config(config, data, select_primary=True)
+        client = CloudClient(config)
+        client.post = Mock(return_value={'choices': [{'finish_reason': 'stop', 'message': {'content': '{"ok":true}'}}]})
+        client.ask('Return JSON.', json_output=True)
+        self.assertEqual(client.post.call_args.args[1]['model'], 'text')
+
+    def test_all_api_protocols_log_request_response_and_failure_without_keys(self):
+        responses = {
+            'compatible': {'choices': [{'finish_reason': 'stop', 'message': {'content': 'OK'}}]},
+            'responses': {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'OK'}]}]},
+            'anthropic': {'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': 'OK'}]},
+        }
+        for protocol, response in responses.items():
+            with self.subTest(protocol=protocol):
+                data = catalog()
+                data['auto'] = False
+                data['profiles'][0]['provider'] = protocol
+                config = {}
+                apply_config(config, data, select_primary=True)
+                client = CloudClient(config)
+                client.post = Mock(return_value=response)
+                with patch('windows_native.log_event') as log:
+                    answer, _ = client.ask('Synthetic question')
+                    self.assertEqual(answer, 'OK')
+                    self.assertEqual([c.args[0] for c in log.call_args_list], ['api_request', 'api_response'])
+                    self.assertNotIn('synthetic', str(log.call_args_list))
+                from api_zoo import APIHTTPError
+                client.post.side_effect = APIHTTPError(403)
+                with patch('windows_native.log_event') as log:
+                    with self.assertRaises(APIHTTPError):
+                        client.ask('Synthetic question')
+                    self.assertEqual(log.call_args.args[0], 'api_failed')
+                    self.assertEqual(log.call_args.kwargs['status'], 403)
+                    self.assertNotIn('synthetic', str(log.call_args_list))

@@ -3,13 +3,25 @@ LEVELS = ('default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
 
 
 def effort_for(profile, model):
-    return profile.get('model_efforts', {}).get(model, profile.get('reasoning_effort', 'medium'))
+    effort = profile.get('model_efforts', {}).get(model, profile.get('reasoning_effort', 'medium'))
+    # A default cannot force a parameter on a known non-reasoning model.
+    supported = choices(profile, model)
+    if supported == ('default',) or ('reasoning_efforts' in next(
+            (m for m in profile.get('models', []) if m['id'] == model), {}) and effort not in supported):
+        return 'default'
+    return effort
 
 
 def choices(profile, model):
     metadata = next((m for m in profile.get('models', []) if m['id'] == model), {})
     if 'reasoning_efforts' in metadata:
         return ('default',) + tuple(metadata['reasoning_efforts'])
+    normalized = model.lower().replace('.', '-')
+    if normalized.startswith(('gpt-3-5', 'gpt-4o', 'gpt-4-1', 'gpt-4-turbo')) or normalized in ('gpt-4', 'gpt-4-32k'):
+        return ('default',)
+    if profile.get('provider') == 'anthropic' and normalized.startswith(
+            ('claude-3', 'claude-sonnet-4-5', 'claude-sonnet-4-0', 'claude-haiku-4-5')):
+        return ('default',)
     if profile.get('provider') == 'deepseek':
         return ('default', 'high', 'max')
     if 'claude' in model.lower() or profile.get('provider') == 'anthropic':
